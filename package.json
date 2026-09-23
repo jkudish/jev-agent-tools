@@ -1,0 +1,22 @@
+{
+  "name": "@jkudish/jev-agent-tools",
+  "version": "0.1.0",
+  "description": "Shared Jev judgment transports and fail-closed Result validation",
+  "type": "module",
+  "license": "MIT",
+  "author": "Joey Kudish",
+  "repository": { "type": "git", "url": "git+https://github.com/jkudish/jev-agent-tools.git" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "node --test test/transports.test.mjs",
+    "test:live": "node --test test/live.test.mjs"
+  },
+  "devDependencies": { "typescript": "^5.6.0", "@types/node": "^22.0.0" },
+  "publishConfig": { "access": "public" }
+}
