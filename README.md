@@ -35,15 +35,22 @@ else console.log(result.answer.refund.noul, result.usage, result.model);
 
 ## Providers
 
-Auto-selection precedence: TypeSafe (`TYPESAFE_API_KEY`, optional `TYPESAFE_BASE_URL`), OpenRouter (`OPENROUTER_API_KEY` beginning `sk-or-`), Cloudflare (`JEV_CLOUDFLARE_API_TOKEN` preferred over `CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID`), then Vercel AI Gateway (`AI_GATEWAY_API_KEY`). Set `JEV_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one.
+Auto-selection tries them in this order:
 
-Model mappings: OpenRouter maps `jev-latest` to `typesafe/jev-1.13`; Cloudflare maps it to `typesafe/jev`; Vercel selects `typesafe-ai/jev` unless given a `typesafe-ai/` model. Direct TypeSafe sends the model you supply, usually `jev-latest`.
+- **TypeSafe** (`TYPESAFE_API_KEY`, optional `TYPESAFE_BASE_URL`): direct; sends the model you supply, usually `jev-latest`.
+- **OpenRouter** (`OPENROUTER_API_KEY`, begins `sk-or-`): maps `jev-latest` to `typesafe/jev-1.13`.
+- **Cloudflare** (`JEV_CLOUDFLARE_API_TOKEN` preferred over `CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID`): maps `jev-latest` to `typesafe/jev`.
+- **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`): selects `typesafe-ai/jev` unless given a `typesafe-ai/` model.
 
-Validation requires exactly the requested answer IDs and criterion IDs, finite probabilities in [0,1] summing to within 0.01 of 1, and a selected Choice maximum within a 0.001 tie tolerance. Noul values must be in [0,1], confidence finite or null, usage counters non-negative safe integers, and the effective model nonempty. An invalid answer yields `ok: false` before any usage is credited, so a malformed response can never become a decision.
+Set `JEV_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one.
+
+## Validation
+
+Every reply is checked before you see it. Validation requires exactly the requested answer IDs and criterion IDs, finite probabilities in [0,1] summing to within 0.01 of 1, and a selected Choice maximum within a 0.001 tie tolerance. Noul values must be in [0,1], confidence finite or null, usage counters non-negative safe integers, and the effective model nonempty. An invalid answer yields `ok: false` before any usage is credited, so a malformed response can never become a decision.
 
 ## Adding a provider
 
-Three paths, ordered by effort.
+The built-ins stay limited to major, well-known providers. TypeSafe, OpenRouter, Cloudflare, and Vercel are in. Pull requests for other major providers are welcome; small or regional carriers are not merged as built-ins. They have two supported paths below, and good third-party packages get linked from the READMEs of this package, [jev-browser](https://github.com/jkudish/jev-browser), and [jev-mcp](https://github.com/jkudish/jev-mcp).
 
 ### No code: inject a transport
 
@@ -76,17 +83,30 @@ const result = await ask(input, { transport: myGateway });
 
 [Jev Browser](https://github.com/jkudish/jev-browser) exposes the same injection as `NavigateOptions.transport`. [Jev MCP](https://github.com/jkudish/jev-mcp) reaches any System One-compatible endpoint with `JEV_PROVIDER=compatible`, no code needed.
 
+### Publish a third-party driver package
+
+Wrap your carrier in a small npm package that exports a factory, so callers keep their credentials in their own environment:
+
+```ts
+import { ask } from "@jkudish/jev-agent-tools";
+import { createRequestyTransport } from "@example/requesty-jev-driver";
+
+const result = await ask(input, { transport: createRequestyTransport(process.env) });
+```
+
+A driver package exports a factory that returns a `JevTransport`: a `name`, and an `ask` that returns `{ answers, usage, model }`. Document the credential environment variables it reads, map `jev-latest` to the model id your carrier serves, and keep error messages free of response bodies and credentials. Validation still happens here, so a malformed reply from your carrier can never become a decision.
+
+Published a driver package? Open an issue or pull request on any of the three repositories and it will be linked from that README's provider section.
+
 ### Add a built-in carrier (PR)
 
-The built-ins are the four carriers in `src/transports/`. To add one:
+For major providers only. The built-ins are the four carriers in `src/transports/`. To add one:
 
 - Add `src/transports/<name>.ts` exporting a driver: `name`, `isConfigured(env)`, `assertConfigured(env)`, and `create(env)` returning a `JevTransport`.
 - Register it in the `drivers` array in `src/provider.ts`, which widens the `BuiltinDriver` name union. Pick its auto-detection position deliberately; the order is the documented precedence.
 - Map `jev-latest` to the model id the carrier actually serves, like the OpenRouter and Cloudflare mappings above.
 - Throw fixed-string errors only. The registry forwards messages that start with `Unknown JEV_PROVIDER`, the no-credentials diagnostic, or `JEV_PROVIDER=`; anything else is replaced by a generic message. Never include response bodies.
 - Add hermetic tests against a stubbed endpoint. A live smoke behind a real key is welcome but optional.
-
-Built-ins stay limited to large, well-known providers. Smaller or regional carriers belong in third-party driver packages; open an issue first and we will link yours from this README.
 
 ### Consumer-side wiring
 
