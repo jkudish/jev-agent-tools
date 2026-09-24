@@ -3,9 +3,9 @@
 [![CI](https://github.com/jkudish/jev-agent-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/jkudish/jev-agent-tools/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Jev judgment calls from your own code, on any supported provider.
+Multi-provider Jev transport with fail-closed validation, used by [Jev Browser](https://github.com/jkudish/jev-browser) and [Jev MCP](https://github.com/jkudish/jev-mcp).
 
-One `ask()` picks a carrier from the environment, sends your typed questions, and validates the answers before you see them. You get the answer plus usage and the effective model, or a typed rejection. It never throws a verdict at you. This is the wire layer behind [Jev Browser](https://github.com/jkudish/jev-browser) and [Jev MCP](https://github.com/jkudish/jev-mcp), and you can build on it directly.
+One `ask()` picks a carrier from the environment, sends your typed questions, and validates the answers before you see them. You get the answer plus usage and the effective model, or a typed rejection. It never throws a verdict at you. You can also build on it directly.
 
 ## Install
 

@@ -1,7 +1,7 @@
 {
   "name": "@jkudish/jev-agent-tools",
-  "version": "0.1.1",
-  "description": "Shared Jev judgment transports and fail-closed Result validation",
+  "version": "0.1.2",
+  "description": "Jev transport/provider layer: multi-provider transport layer that supports fail-closed validation. Used by jkudish/jev-browser and jkudish/jev-mcp.",
   "type": "module",
   "license": "MIT",
   "author": "Joey Kudish",
