@@ -68,6 +68,9 @@ function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+const ROUNDING_STEP = 0.005; // worst-case error of one probability rounded to two decimals
+const MAX_SUM_DRIFT = 0.05;
+
 function distribution(value: unknown, keys: string[]): { ok: true; probabilities: Record<string, number> } | { ok: false; reason: string } {
   if (!record(value) || Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key))) {
     return { ok: false, reason: "distribution must contain exactly the criteria keys" };
@@ -82,9 +85,15 @@ function distribution(value: unknown, keys: string[]): { ok: true; probabilities
     entries.push([key, probability]);
     sum += probability as number;
   }
-  // Upstream distributions are rounded; permit a one-percent sum drift and
-  // a 0.001 selection tie, but not a different winner.
-  if (Math.abs(sum - 1) > 0.01) return { ok: false, reason: "distribution must sum to approximately 1" };
+  // Upstream distributions are rounded to two decimals, so each nonzero entry
+  // can be off by up to 0.005 and the drift grows with how many options carry
+  // weight (a results page with 8 live options can legitimately sum to 0.98).
+  // Permit that rounding drift (never less than one percent, never more than
+  // five, so garbage still fails) and a 0.001 selection tie, but not a
+  // different winner. The epsilon keeps an exact 1.01 from failing on IEEE-754.
+  const nonzero = entries.filter(([, probability]) => probability > 0).length;
+  const tolerance = Math.min(MAX_SUM_DRIFT, Math.max(0.01, ROUNDING_STEP * nonzero)) + 1e-9;
+  if (Math.abs(sum - 1) > tolerance) return { ok: false, reason: "distribution must sum to approximately 1" };
   return { ok: true, probabilities: Object.fromEntries(entries) };
 }
 
