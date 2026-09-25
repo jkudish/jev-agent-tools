@@ -1,6 +1,6 @@
 {
   "name": "@jkudish/jev-agent-tools",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Jev transport/provider layer: multi-provider transport layer that supports fail-closed validation. Used by jkudish/jev-browser and jkudish/jev-mcp.",
   "type": "module",
   "license": "MIT",
