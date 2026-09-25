@@ -80,6 +80,25 @@ test("forced credentials reject every missing or invalid variant without leaking
   assert.equal(resolveTransport({ CLOUDFLARE_ACCOUNT_ID: "account-secret", AI_GATEWAY_API_KEY: "ai-secret" }).name, "vercel");
 });
 
+test("sum tolerance scales with two-decimal rounding across live options, but stays bounded", async () => {
+  // A wide action space (like a search results page): 60 options, most at 0.
+  const criteria = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`o${i}`, `option ${i}`]));
+  const wide = { ...input, questions: { pick: { type: "choice", criteria } } };
+  const reply = (weights) => {
+    const probabilities = Object.fromEntries(Object.keys(criteria).map((key, i) => [key, weights[i] ?? 0]));
+    return carrier({ answers: { pick: { type: "choice", choice: "o0", probabilities } } });
+  };
+  // 8 live options rounded to two decimals, summing to 0.98 (seen live) and 1.02: accepted.
+  assert.equal((await askJev(reply([0.4, 0.2, 0.14, 0.1, 0.06, 0.04, 0.02, 0.02]), wide)).ok, true);
+  assert.equal((await askJev(reply([0.44, 0.15, 0.15, 0.1, 0.08, 0.05, 0.03, 0.02]), wide)).ok, true);
+  // Two live options can only drift 0.01: 0.97 is not rounding.
+  rejected(await askJev(reply([0.6, 0.37]), wide), "invalid_distribution", /approximately 1/);
+  // An exact 1.01 on two options is valid rounding, despite 1.01 - 1 > 0.01 in IEEE-754.
+  assert.equal((await askJev(carrier({ answers: { ...answers, item: { ...answers.item, probabilities: { alpha: 0.2, beta: 0.81 } } } }), input)).ok, true);
+  // The drift is capped at five percent no matter how many options are live.
+  rejected(await askJev(reply(Array.from({ length: 20 }, (_, i) => (i === 0 ? 0.13 : 0.05))), wide), "invalid_distribution", /approximately 1/);
+});
+
 test("facade validates the complete answer contract before usage can be credited", async () => {
   const good = await askJev(carrier(), input);
   assert.equal(good.ok, true);
