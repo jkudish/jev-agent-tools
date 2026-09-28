@@ -2,6 +2,7 @@ import { typesafe } from "./transports/typesafe.js";
 import { openrouter } from "./transports/openrouter.js";
 import { cloudflare } from "./transports/cloudflare.js";
 import { vercel } from "./transports/vercel.js";
+import { siliconflow } from "./transports/siliconflow.js";
 
 export interface JevTransportInput {
   state: unknown;
@@ -22,7 +23,7 @@ export interface JevTransport {
 }
 
 export interface BuiltinDriver {
-  readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel";
+  readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel" | "siliconflow";
   isConfigured(env: Env): boolean;
   assertConfigured(env: Env): void;
   create(env: Env): JevTransport;
@@ -43,13 +44,13 @@ export type AskResult =
 
 export interface AskConfig { env?: Env; transport?: JevTransport }
 
-const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel];
+const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel, siliconflow];
 
 export function resolveTransport(env: Env = process.env): JevTransport {
   const explicit = (env.JEV_PROVIDER ?? "auto").toLowerCase();
   if (explicit !== "auto") {
     const driver = drivers.find((candidate) => candidate.name === explicit);
-    if (!driver) throw new Error("Unknown JEV_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, or auto.");
+    if (!driver) throw new Error("Unknown JEV_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, siliconflow, or auto.");
     try {
       driver.assertConfigured(env);
     } catch (error) {
@@ -59,7 +60,7 @@ export function resolveTransport(env: Env = process.env): JevTransport {
   }
   const driver = drivers.find((candidate) => candidate.isConfigured(env));
   if (!driver) {
-    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY found. Set one, or JEV_PROVIDER to choose explicitly.");
+    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, AI_GATEWAY_API_KEY, or SILICONFLOW_API_KEY found. Set one, or JEV_PROVIDER to choose explicitly.");
   }
   return driver.create(env);
 }
@@ -108,7 +109,7 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
     return { ok: false, code: "configuration_error", message };
   }
   // Injected transport names are untrusted and never included in error text.
-  const provider = typeof transport.name === "string" && /^(typesafe|openrouter|cloudflare|vercel|fixture)$/.test(transport.name) ? transport.name : "unknown";
+  const provider = typeof transport.name === "string" && /^(typesafe|openrouter|cloudflare|vercel|siliconflow|fixture)$/.test(transport.name) ? transport.name : "unknown";
   let reply: JevTransportReply;
   try {
     reply = await transport.ask(input);

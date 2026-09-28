@@ -41,8 +41,9 @@ Auto-selection tries them in this order:
 - **OpenRouter** (`OPENROUTER_API_KEY`, begins `sk-or-`): maps `jev-latest` to `typesafe/jev-1.13`.
 - **Cloudflare** (`JEV_CLOUDFLARE_API_TOKEN` preferred over `CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID`): maps `jev-latest` to `typesafe/jev`.
 - **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`): selects `typesafe-ai/jev` unless given a `typesafe-ai/` model.
+- **SiliconFlow** (`SILICONFLOW_API_KEY`): maps `jev-latest` to `semif`, the always-current alias on its System One endpoint.
 
-Set `JEV_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one.
+Set `JEV_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `siliconflow`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one.
 
 ## Validation
 
@@ -50,7 +51,7 @@ Every reply is checked before you see it. Validation requires exactly the reques
 
 ## Adding a provider
 
-The built-ins stay limited to major, well-known providers. TypeSafe, OpenRouter, Cloudflare, and Vercel are in. Pull requests for other major providers are welcome; small or regional carriers are not merged as built-ins. They have two supported paths below, and good third-party packages get linked from the READMEs of this package, [jev-browser](https://github.com/jkudish/jev-browser), and [jev-mcp](https://github.com/jkudish/jev-mcp).
+The built-ins stay limited to major, well-known providers. TypeSafe, OpenRouter, Cloudflare, Vercel, and SiliconFlow are in. Pull requests for other major providers are welcome; small or regional carriers are not merged as built-ins. They have two supported paths below, and good third-party packages get linked from the READMEs of this package, [jev-browser](https://github.com/jkudish/jev-browser), and [jev-mcp](https://github.com/jkudish/jev-mcp).
 
 ### No code: inject a transport
 

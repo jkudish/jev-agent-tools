@@ -4,6 +4,7 @@ import { ask, resolveTransport } from "../dist/index.js";
 import { typesafe } from "../dist/transports/typesafe.js";
 import { openrouter } from "../dist/transports/openrouter.js";
 import { cloudflare } from "../dist/transports/cloudflare.js";
+import { siliconflow } from "../dist/transports/siliconflow.js";
 import { createVercelDriver, adaptVercelAnswers } from "../dist/transports/vercel.js";
 
 const askJev = (transport, input) => ask(input, { transport });
@@ -11,7 +12,7 @@ const rejected = (result, code, pattern) => {
   assert.equal(result.ok, false);
   assert.equal(result.code, code);
   assert.match(result.message, pattern);
-  assert.doesNotMatch(result.message, /body-secret|ts-secret|sk-or-secret|high-secret|low-secret|ai-secret/);
+  assert.doesNotMatch(result.message, /body-secret|ts-secret|sk-or-secret|high-secret|low-secret|ai-secret|sf-secret/);
 };
 
 const signal = new AbortController().signal;
@@ -28,30 +29,31 @@ async function withFetch(fn, run) {
 }
 
 test("registry auto-detects in precedence order and explicit names select only themselves", () => {
-  const all = { TYPESAFE_API_KEY: "ts-secret", OPENROUTER_API_KEY: "sk-or-secret", CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account", AI_GATEWAY_API_KEY: "ai-secret" };
+  const all = { TYPESAFE_API_KEY: "ts-secret", OPENROUTER_API_KEY: "sk-or-secret", CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account", AI_GATEWAY_API_KEY: "ai-secret", SILICONFLOW_API_KEY: "sf-secret" };
   for (const [removed, expected] of [
     [[], "typesafe"],
     [["TYPESAFE_API_KEY"], "openrouter"],
     [["TYPESAFE_API_KEY", "OPENROUTER_API_KEY"], "cloudflare"],
     [["TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN"], "vercel"],
+    [["TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN", "AI_GATEWAY_API_KEY"], "siliconflow"],
   ]) {
     const env = { ...all };
     for (const key of removed) delete env[key];
     assert.equal(resolveTransport(env).name, expected);
   }
-  for (const name of ["typesafe", "openrouter", "cloudflare", "vercel"]) {
+  for (const name of ["typesafe", "openrouter", "cloudflare", "vercel", "siliconflow"]) {
     assert.equal(resolveTransport({ ...all, JEV_PROVIDER: name.toUpperCase() }).name, name);
   }
   assert.equal(resolveTransport({ JEV_CLOUDFLARE_API_TOKEN: "pref", CLOUDFLARE_ACCOUNT_ID: "account" }).name, "cloudflare");
   assert.throws(() => resolveTransport({ ...all, JEV_PROVIDER: "typo" }), /Unknown JEV_PROVIDER/);
-  assert.throws(() => resolveTransport({}), (error) => ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN", "JEV_CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "AI_GATEWAY_API_KEY"].every((name) => error.message.includes(name)));
+  assert.throws(() => resolveTransport({}), (error) => ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN", "JEV_CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "AI_GATEWAY_API_KEY", "SILICONFLOW_API_KEY"].every((name) => error.message.includes(name)));
 });
 
 test("public ask returns configuration errors and redacts thrown transport details", async () => {
   rejected(await ask(input, { env: { JEV_PROVIDER: "typo" } }), "configuration_error", /Unknown JEV_PROVIDER/);
   const absent = await ask(input, { env: {} });
   rejected(absent, "configuration_error", /No TYPESAFE_API_KEY/);
-  for (const name of ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN", "JEV_CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "AI_GATEWAY_API_KEY"]) {
+  for (const name of ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN", "JEV_CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "AI_GATEWAY_API_KEY", "SILICONFLOW_API_KEY"]) {
     assert.ok(absent.message.includes(name));
   }
   rejected(await ask(input, { transport: { name: "body-secret", ask: async () => { throw Error("body-secret ts-secret"); } } }), "request_failed", /provider unknown: request failed/);
@@ -67,6 +69,7 @@ test("forced credentials reject every missing or invalid variant without leaking
     ["cloudflare", { CLOUDFLARE_ACCOUNT_ID: "account-secret" }, /CLOUDFLARE_API_TOKEN/],
     ["cloudflare", { JEV_CLOUDFLARE_API_TOKEN: "cf-secret" }, /CLOUDFLARE_ACCOUNT_ID/],
     ["vercel", {}, /AI_GATEWAY_API_KEY/],
+    ["siliconflow", {}, /SILICONFLOW_API_KEY/],
   ];
   for (const [name, env, pattern] of cases) {
     assert.throws(() => resolveTransport({ ...env, JEV_PROVIDER: name }), (error) => {
@@ -257,6 +260,36 @@ test("Cloudflare token priority, double envelope, state, usage, and safe errors"
   });
 });
 
+test("SiliconFlow maps latest to semif, sends exact envelope and redacts HTTP errors", async () => {
+  const calls = [];
+  await withFetch(async (url, init) => {
+    calls.push({ url, init });
+    return Response.json({ answers, usage, model: JSON.parse(init.body).model });
+  }, async () => {
+    const transport = siliconflow.create({ SILICONFLOW_API_KEY: "sf-secret" });
+    assert.equal((await askJev(transport, input)).model, "semif");
+    assert.equal((await askJev(transport, { ...input, model: "diffusiongemma" })).model, "diffusiongemma");
+    assert.equal((await transport.ask({ ...input, model: "kev-4b" })).model, "kev-4b");
+    assert.equal(calls[0].url, "https://api.siliconflow.cn/v1/systemone");
+    assert.equal(calls[0].init.method, "POST");
+    assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sf-secret", "Content-Type": "application/json" });
+    assert.equal(calls[0].init.signal, signal);
+    assert.deepEqual(JSON.parse(calls[0].init.body), { model: "semif", state: input.state, questions });
+    assert.deepEqual(JSON.parse(calls[2].init.body).model, "kev-4b");
+  });
+  for (const response of [new Response("body-secret", { status: 401 }), new Response("body-secret", { status: 200 })]) {
+    await withFetch(async () => response, async () => {
+      rejected(await askJev(siliconflow.create({ SILICONFLOW_API_KEY: "sf-secret" }), input), "request_failed", /request failed/);
+    });
+  }
+  await withFetch(async () => Response.json({ usage }), async () => {
+    rejected(await askJev(siliconflow.create({ SILICONFLOW_API_KEY: "sf-secret" }), input), "malformed_answer", /question <response>.*answers/);
+  });
+  await withFetch(async () => { throw new Error("body-secret sf-secret"); }, async () => {
+    rejected(await askJev(siliconflow.create({ SILICONFLOW_API_KEY: "sf-secret" }), input), "request_failed", /request failed/);
+  });
+});
+
 test("Vercel factory forwards evaluate request and pure adaptation preserves confidence", async () => {
   let call;
   const raw = { item: { type: "choice", choice: "beta", probabilities: { alpha: 0.2, beta: 0.8 } }, yes: { type: "boolean", probability: 0.7 } };
@@ -305,6 +338,7 @@ test("all adapters distinguish absent usage from malformed containers and presen
     ["openrouter", "input_tokens", (wire) => withFetch(async () => Response.json({ answers, ...wire }), () => askJev(openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" }), input))],
     ["cloudflare", "input_tokens", (wire) => withFetch(async () => Response.json({ result: { state: "Completed", result: { answers, ...wire } } }), () => askJev(cloudflare.create({ CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account" }), input))],
     ["vercel", "inputTokens", (wire) => askJev(createVercelDriver(async () => ({ answers: vercelAnswers, ...wire })).create({ AI_GATEWAY_API_KEY: "ai-secret" }), input)],
+    ["siliconflow", "input_tokens", (wire) => withFetch(async () => Response.json({ answers, ...wire }), () => askJev(siliconflow.create({ SILICONFLOW_API_KEY: "sf-secret" }), input))],
   ]) {
     assert.deepEqual((await run({})).usage, { input_tokens: 0, output_tokens: 0 }, name);
     assert.deepEqual((await run({ usage: {} })).usage, { input_tokens: 0, output_tokens: 0 }, name);
