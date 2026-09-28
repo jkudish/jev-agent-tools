@@ -50,7 +50,7 @@ Every reply is checked before you see it. Validation requires exactly the reques
 
 ## Adding a provider
 
-The built-ins stay limited to major, well-known providers. TypeSafe, OpenRouter, Cloudflare, and Vercel are in. Pull requests for other major providers are welcome; small or regional carriers are not merged as built-ins. They have two supported paths below, and good third-party packages get linked from the READMEs of this package, [jev-browser](https://github.com/jkudish/jev-browser), and [jev-mcp](https://github.com/jkudish/jev-mcp).
+The built-in list is a fixed, maintainer-curated set, currently: TypeSafe, OpenRouter, Cloudflare, and Vercel. PRs that add a new built-in carrier are generally not accepted unless sufficient demand is shown. If you want support for a new provider, the supported path is a third-party driver package. I will accept PRs that link third-party providers from the READMEs of this package, [jev-browser](https://github.com/jkudish/jev-browser), and [jev-mcp](https://github.com/jkudish/jev-mcp).
 
 ### No code: inject a transport
 
