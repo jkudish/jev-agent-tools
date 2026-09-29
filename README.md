@@ -98,9 +98,9 @@ A driver package exports a factory that returns a `JevTransport`: a `name`, and 
 
 Published a driver package? Open an issue or pull request on any of the three repositories and it will be linked from that README's provider section.
 
-### Add a built-in carrier (PR)
+### Adding a built-in carrier
 
-For major providers only. The built-ins are the four carriers in `src/transports/`. To add one:
+The built-ins are a fixed, maintainer-curated set (TypeSafe, OpenRouter, Cloudflare, Vercel). New built-ins are generally not accepted unless sufficient demand is shown — open an issue first. The mechanics, for when one is accepted:
 
 - Add `src/transports/<name>.ts` exporting a driver: `name`, `isConfigured(env)`, `assertConfigured(env)`, and `create(env)` returning a `JevTransport`.
 - Register it in the `drivers` array in `src/provider.ts`, which widens the `BuiltinDriver` name union. Pick its auto-detection position deliberately; the order is the documented precedence.
