@@ -114,11 +114,19 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
     reply = await transport.ask(input);
   } catch (error) {
     // Transports may attach a numeric `status` to HTTP failures; classify it
-    // for callers. The status is a number, never a response body.
-    const status = (error as { status?: unknown })?.status;
-    if (status === 429) return { ok: false, code: "rate_limited", message: `Jev provider ${provider}: rate limited (HTTP 429)` };
-    if (typeof status === "number" && status >= 500) return { ok: false, code: "unavailable", message: `Jev provider ${provider}: unavailable (HTTP ${status})` };
-    if (typeof status === "number") return { ok: false, code: "request_failed", message: `Jev provider ${provider}: request failed (HTTP ${status})` };
+    // for callers. The read itself is guarded — an injected transport whose
+    // error throws from a status getter must not break the non-throwing
+    // contract — and the status is a number, never a response body.
+    let status: unknown;
+    try {
+      status = (error as { status?: unknown } | null | undefined)?.status;
+    } catch {
+      status = undefined;
+    }
+    const httpStatus = typeof status === "number" && Number.isInteger(status) && status >= 100 && status < 600 ? status : undefined;
+    if (httpStatus === 429) return { ok: false, code: "rate_limited", message: `Jev provider ${provider}: rate limited (HTTP 429)` };
+    if (httpStatus !== undefined && httpStatus >= 500) return { ok: false, code: "unavailable", message: `Jev provider ${provider}: unavailable (HTTP ${httpStatus})` };
+    if (httpStatus !== undefined) return { ok: false, code: "request_failed", message: `Jev provider ${provider}: request failed (HTTP ${httpStatus})` };
     return { ok: false, code: "request_failed", message: `Jev provider ${provider}: request failed` };
   }
   const fail = (id: string, code: RejectionCode, reason: string): AskResult => ({ ok: false, code, message: `Jev provider ${provider} question ${id}: ${reason}` });

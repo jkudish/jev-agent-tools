@@ -370,3 +370,91 @@ test("typesafe transport retries retriable statuses, honors Retry-After, and rep
     assert.ok(Date.now() - started < 500, "abort during backoff rejects promptly");
   });
 });
+
+test("typesafe transport retries 408/409, parses HTTP-date Retry-After, and caps long hints", async () => {
+  const driver = typesafe.create({ TYPESAFE_API_KEY: "ts-secret" });
+  const ok = () => Response.json({ answers, usage, model: "jev-1.13.0" });
+
+  // 408 and 409 are retriable alongside 429 and 5xx.
+  let calls = 0;
+  await withFetch(async () => { calls++; return calls < 3 ? new Response("{}", { status: 408, headers: { "retry-after": "0" } }) : ok(); }, async () => {
+    assert.equal((await askJev(driver, input)).ok, true);
+  });
+  assert.equal(calls, 3);
+  calls = 0;
+  await withFetch(async () => { calls++; return calls < 2 ? new Response("{}", { status: 409, headers: { "retry-after": "0" } }) : ok(); }, async () => {
+    assert.equal((await askJev(driver, input)).ok, true);
+  });
+  assert.equal(calls, 2);
+
+  // A past HTTP-date means retry now: no negative wait, and no jitter backfill.
+  calls = 0;
+  const past = new Date(Date.now() - 60_000).toUTCString();
+  await withFetch(async () => { calls++; return calls < 2 ? new Response("{}", { status: 429, headers: { "retry-after": past } }) : ok(); }, async () => {
+    const started = Date.now();
+    assert.equal((await askJev(driver, input)).ok, true);
+    assert.ok(Date.now() - started < 200, "expired Retry-After date retries immediately");
+  });
+  assert.equal(calls, 2);
+
+  // A near-future HTTP-date is honored as a real delay, beyond jitter range.
+  // +1700ms because HTTP-dates truncate to whole seconds: worst case the
+  // parsed instant is 700ms out, best case 1700ms.
+  calls = 0;
+  const soon = new Date(Date.now() + 1_700).toUTCString();
+  await withFetch(async () => { calls++; return calls < 2 ? new Response("{}", { status: 429, headers: { "retry-after": soon } }) : ok(); }, async () => {
+    const started = Date.now();
+    assert.equal((await askJev(driver, input)).ok, true);
+    assert.ok(Date.now() - started >= 500, "future Retry-After date delays the retry");
+  });
+  assert.equal(calls, 2);
+
+  // A far-future hint is capped at five seconds, never honored in full.
+  calls = 0;
+  const far = new Date(Date.now() + 60_000).toUTCString();
+  await withFetch(async () => { calls++; return calls < 2 ? new Response("{}", { status: 429, headers: { "retry-after": far } }) : ok(); }, async () => {
+    const started = Date.now();
+    assert.equal((await askJev(driver, input)).ok, true);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed >= 4_700 && elapsed <= 5_700, `Retry-After capped at 5s (took ${elapsed}ms)`);
+  });
+  assert.equal(calls, 2);
+});
+
+test("typesafe transport does not retry network errors and passes malformed models to validation", async () => {
+  const driver = typesafe.create({ TYPESAFE_API_KEY: "ts-secret" });
+
+  // A rejecting fetch (DNS, socket, offline) fails on the first attempt — no retry.
+  let calls = 0;
+  await withFetch(async () => { calls++; throw new Error("ECONNREFUSED (fixture)"); }, async () => {
+    rejected(await askJev(driver, input), "request_failed", /request failed/);
+  });
+  assert.equal(calls, 1);
+
+  // A present-but-malformed model passes through untouched; shared validation rejects it.
+  for (const model of ["", "   ", 42]) {
+    await withFetch(async () => Response.json({ answers, usage, model }), async () => {
+      rejected(await askJev(driver, input), "invalid_model", /effective model must be nonempty/);
+    });
+  }
+});
+
+test("ask classifies transport error statuses defensively and never throws", async () => {
+  // A status getter that itself throws must not break the non-throwing contract.
+  const throwingGetter = { name: "throwing-status", ask: async () => {
+    const error = new Error("getter-secret boom");
+    Object.defineProperty(error, "status", { get() { throw new Error("getter threw"); } });
+    throw error;
+  } };
+  rejected(await ask(input, { transport: throwingGetter }), "request_failed", /request failed/);
+
+  // Only integer statuses in 100–599 classify; 429 is rate_limited and 5xx unavailable.
+  for (const [status, code, pattern] of [[429, "rate_limited", /rate limited \(HTTP 429\)/], [503, "unavailable", /unavailable \(HTTP 503\)/], [403, "request_failed", /request failed \(HTTP 403\)/]]) {
+    const transport = { name: `status-${status}`, ask: async () => { throw Object.assign(new Error("http"), { status }); } };
+    rejected(await ask(input, { transport }), code, pattern);
+  }
+  for (const status of [99, 600, 429.5, "429", null, undefined]) {
+    const transport = { name: `status-${String(status)}`, ask: async () => { throw Object.assign(new Error("http"), { status }); } };
+    rejected(await ask(input, { transport }), "request_failed", /request failed/);
+  }
+});
