@@ -9,17 +9,24 @@ const MAX_ATTEMPTS = 3;
 const MAX_DELAY_MS = 5_000;
 
 const backoffMs = (retryAfter: string | null, attempt: number): number => {
-  let ms = -1;
+  // Retry-After as delay-seconds or HTTP-date; a past date means retry now.
+  let parsed = false;
+  let ms = 0;
   if (retryAfter) {
     const seconds = Number(retryAfter.trim());
-    if (Number.isFinite(seconds)) ms = seconds * 1000;
-    else {
+    if (Number.isFinite(seconds)) {
+      ms = seconds * 1000;
+      parsed = true;
+    } else {
       const at = Date.parse(retryAfter);
-      if (!Number.isNaN(at)) ms = at - Date.now();
+      if (!Number.isNaN(at)) {
+        ms = at - Date.now();
+        parsed = true;
+      }
     }
   }
   // No usable header: small jittered exponential backoff.
-  if (ms < 0) ms = 250 * 2 ** (attempt - 1) + Math.floor(Math.random() * 100);
+  if (!parsed) ms = 250 * 2 ** (attempt - 1) + Math.floor(Math.random() * 100);
   return Math.min(Math.max(ms, 0), MAX_DELAY_MS);
 };
 
@@ -70,9 +77,10 @@ export const typesafe: BuiltinDriver = {
             throw new Error("TypeSafe API request failed");
           }
           if (retryable(wire.status) && attempt < MAX_ATTEMPTS) {
-            // Release the connection before backing off; honor Retry-After
-            // (delay-seconds or HTTP-date) within the caller's signal.
-            await wire.body?.cancel().catch(() => {});
+            // Fire-and-forget the connection release; awaiting a stream
+            // cancellation that never settles would stall past the caller's
+            // abort. Backoff itself is abort-aware.
+            void wire.body?.cancel().catch(() => {});
             await sleep(backoffMs(wire.headers.get("retry-after"), attempt), signal);
             continue;
           }
@@ -92,15 +100,17 @@ export const typesafe: BuiltinDriver = {
           throw new Error("TypeSafe API invalid usage (response omitted)");
         }
         // Report the effective model the API answered with, not the alias we
-        // requested, so callers can detect silent model changes.
-        const effectiveModel = typeof response?.model === "string" && response.model.trim() ? response.model : model;
+        // requested. Fall back to the alias only when the field is absent; a
+        // present-but-malformed value passes through so the shared
+        // invalid_model validation rejects it instead of masking it.
+        const effectiveModel = Object.hasOwn(response, "model") ? response.model : model;
         return {
           answers: response?.answers,
           usage: {
             input_tokens: usage && Object.hasOwn(usage, "input_tokens") ? usage.input_tokens as number : 0,
             output_tokens: usage && Object.hasOwn(usage, "output_tokens") ? usage.output_tokens as number : 0,
           },
-          model: effectiveModel,
+          model: effectiveModel as string,
         };
       },
     };
