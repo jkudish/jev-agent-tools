@@ -316,3 +316,57 @@ test("all adapters distinguish absent usage from malformed containers and presen
     }
   }
 });
+
+test("typesafe transport retries retriable statuses, honors Retry-After, and reports the effective model", async () => {
+  const driver = typesafe.create({ TYPESAFE_API_KEY: "ts-secret" });
+  // 429 twice with Retry-After: 0, then 200: the call succeeds on the third attempt.
+  let calls = 0;
+  await withFetch(async () => {
+    calls++;
+    if (calls < 3) return new Response("{}", { status: 429, headers: { "retry-after": "0" } });
+    return Response.json({ answers, usage, model: "jev-1.13.0" });
+  }, async () => {
+    const result = await askJev(driver, input);
+    assert.equal(result.ok, true);
+    assert.equal(result.model, "jev-1.13.0", "the API's effective model, not the requested alias");
+  });
+  assert.equal(calls, 3);
+
+  // Exhausted 429s surface as rate_limited with the status, never the body.
+  calls = 0;
+  await withFetch(async () => { calls++; return new Response("{}", { status: 429, headers: { "retry-after": "0" } }); }, async () => {
+    rejected(await askJev(driver, input), "rate_limited", /rate limited \(HTTP 429\)/);
+  });
+  assert.equal(calls, 3);
+
+  // Exhausted 5xx surface as unavailable.
+  calls = 0;
+  await withFetch(async () => { calls++; return new Response("{}", { status: 503, headers: { "retry-after": "0" } }); }, async () => {
+    rejected(await askJev(driver, input), "unavailable", /unavailable \(HTTP 503\)/);
+  });
+  assert.equal(calls, 3);
+
+  // Non-retriable statuses fail on the first attempt, with the status in the message.
+  calls = 0;
+  await withFetch(async () => { calls++; return new Response("{}", { status: 401 }); }, async () => {
+    rejected(await askJev(driver, input), "request_failed", /request failed \(HTTP 401\)/);
+  });
+  assert.equal(calls, 1);
+
+  // An absent response.model falls back to the requested alias.
+  await withFetch(async () => Response.json({ answers, usage }), async () => {
+    const result = await askJev(driver, input);
+    assert.equal(result.ok, true);
+    assert.equal(result.model, input.model);
+  });
+
+  // Aborting during the backoff window rejects promptly instead of sleeping on.
+  const controller = new AbortController();
+  calls = 0;
+  await withFetch(async () => { calls++; return new Response("{}", { status: 429, headers: { "retry-after": "1" } }); }, async () => {
+    setTimeout(() => controller.abort(), 25);
+    const started = Date.now();
+    rejected(await askJev(driver, { ...input, signal: controller.signal }), "request_failed", /request failed/);
+    assert.ok(Date.now() - started < 500, "abort during backoff rejects promptly");
+  });
+});
