@@ -17,7 +17,7 @@ npm install @jkudish/jev-agent-tools
 
 ## Result contract
 
-`ask(input, config?)` returns `Promise<{ ok: true, answer, usage, model, provider } | { ok: false, code, message }>` and never throws a verdict. Transport failures return `request_failed`; invalid responses return specific codes such as `answer_id_mismatch`, `invalid_distribution`, `invalid_noul`, `invalid_usage`, and `invalid_model`; configuration errors return `configuration_error`. Messages never include response bodies or credentials. The two consumers need different error behavior: jev-browser maps `!ok` to its own exception, while jev-mcp maps `!ok` to `invalid_response`.
+`ask(input, config?)` returns `Promise<{ ok: true, answer, usage, model, provider } | { ok: false, code, message }>` and never throws a verdict. The TypeSafe transport retries 408/409/429/5xx up to three attempts, honoring `Retry-After` within the caller's abort signal. Transport failures return `request_failed` (message includes the HTTP status when there is one), `rate_limited` when 429 retries are exhausted, or `unavailable` when 5xx retries are exhausted, and report the API's effective model rather than the requested alias; invalid responses return specific codes such as `answer_id_mismatch`, `invalid_distribution`, `invalid_noul`, `invalid_usage`, and `invalid_model`; configuration errors return `configuration_error`. Messages never include response bodies or credentials. The two consumers need different error behavior: jev-browser maps `!ok` to its own exception, while jev-mcp maps `!ok` to `invalid_response`.
 
 ```js
 import { ask } from "@jkudish/jev-agent-tools";

@@ -35,7 +35,7 @@ export type JevAnswer =
   | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number | null }
   | { type: "score"; score: number; probabilities: Record<string, number>; confidence: number | null };
 
-export type RejectionCode = "request_failed" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "invalid_confidence" | "invalid_usage" | "invalid_model";
+export type RejectionCode = "request_failed" | "rate_limited" | "unavailable" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "invalid_confidence" | "invalid_usage" | "invalid_model";
 
 export type AskResult =
   | { ok: true; answer: Record<string, JevAnswer>; usage: JevTransportReply["usage"]; model: string; provider: string }
@@ -112,7 +112,13 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
   let reply: JevTransportReply;
   try {
     reply = await transport.ask(input);
-  } catch {
+  } catch (error) {
+    // Transports may attach a numeric `status` to HTTP failures; classify it
+    // for callers. The status is a number, never a response body.
+    const status = (error as { status?: unknown })?.status;
+    if (status === 429) return { ok: false, code: "rate_limited", message: `Jev provider ${provider}: rate limited (HTTP 429)` };
+    if (typeof status === "number" && status >= 500) return { ok: false, code: "unavailable", message: `Jev provider ${provider}: unavailable (HTTP ${status})` };
+    if (typeof status === "number") return { ok: false, code: "request_failed", message: `Jev provider ${provider}: request failed (HTTP ${status})` };
     return { ok: false, code: "request_failed", message: `Jev provider ${provider}: request failed` };
   }
   const fail = (id: string, code: RejectionCode, reason: string): AskResult => ({ ok: false, code, message: `Jev provider ${provider} question ${id}: ${reason}` });
