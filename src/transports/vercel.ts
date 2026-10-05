@@ -1,8 +1,8 @@
 import type { BuiltinDriver } from "../provider.js";
 
-type Evaluation = (args: { apiKey: string; model: string; state: unknown; questions: Record<string, unknown>; signal: AbortSignal }) => Promise<any>;
+type Evaluation = (args: { apiKey: string; model: string; state: unknown; questions: Record<string, unknown>; signal: AbortSignal; providerOptions?: { gateway: { zeroDataRetention: true } } }) => Promise<any>;
 
-async function evaluate({ apiKey, model, state, questions, signal }: Parameters<Evaluation>[0]): Promise<any> {
+async function evaluate({ apiKey, model, state, questions, signal, providerOptions }: Parameters<Evaluation>[0]): Promise<any> {
   const response = await fetch("https://ai-gateway.vercel.sh/v4/ai/evaluation-model", {
     method: "POST",
     headers: {
@@ -13,7 +13,7 @@ async function evaluate({ apiKey, model, state, questions, signal }: Parameters<
       "ai-evaluation-model-specification-version": "4",
       "ai-model-id": model,
     },
-    body: JSON.stringify({ state, questions }),
+    body: JSON.stringify({ state, questions, ...(providerOptions ? { providerOptions } : {}) }),
     signal,
   });
   if (!response.ok) throw { statusCode: response.status };
@@ -31,6 +31,7 @@ export function createVercelDriver(evaluateRequest: Evaluation = evaluate): Buil
     create(env) {
       this.assertConfigured(env);
       const key = env.AI_GATEWAY_API_KEY!;
+      const providerOptions = /^(1|true)$/i.test(env.JEV_VERCEL_ZERO_DATA_RETENTION ?? "") ? { gateway: { zeroDataRetention: true as const } } : undefined;
       return {
         name: this.name,
         async ask({ state, questions, model, signal }) {
@@ -42,7 +43,7 @@ export function createVercelDriver(evaluateRequest: Evaluation = evaluate): Buil
           const effective = model.startsWith("typesafe-ai/") ? model : "typesafe-ai/jev";
           let result: Awaited<ReturnType<Evaluation>>;
           try {
-            result = await evaluateRequest({ apiKey: key, model: effective, state, questions: Object.fromEntries(adaptedQuestions), signal });
+            result = await evaluateRequest({ apiKey: key, model: effective, state, questions: Object.fromEntries(adaptedQuestions), signal, ...(providerOptions ? { providerOptions } : {}) });
           } catch (error) {
             if (signal.aborted) throw signal.reason;
             const status = (error as { statusCode?: unknown }).statusCode;

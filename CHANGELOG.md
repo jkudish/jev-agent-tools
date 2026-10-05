@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Vercel transport: opt-in per-request zero data retention. With `JEV_VERCEL_ZERO_DATA_RETENTION=1` (or `true`), every request carries `providerOptions.gateway.zeroDataRetention: true`. Unset, the request body is unchanged. No effect on the TypeSafe, OpenRouter, or Cloudflare carriers.
+
 ## 0.1.4
 
 - TypeSafe transport resilience: 408/409/429/5xx now retry (up to three attempts) honoring `Retry-After` — delay-seconds or HTTP-date, capped at 5s per sleep, abort-aware. Exhausted 429s classify as `rate_limited` and 5xx as `unavailable`; `request_failed` messages carry the numeric status, never the response body. The transport reports the API's effective model (`response.model`) instead of the requested alias, falling back only when the field is absent so malformed values surface through validation. Via [#6](https://github.com/jkudish/jev-agent-tools/pull/6), fixing [#5](https://github.com/jkudish/jev-agent-tools/issues/5), reported by [@deadczarvc](https://github.com/deadczarvc).

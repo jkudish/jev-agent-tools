@@ -40,7 +40,7 @@ Auto-selection tries them in this order:
 - **TypeSafe** (`TYPESAFE_API_KEY`, optional `TYPESAFE_BASE_URL`): direct; sends the model you supply, usually `jev-latest`.
 - **OpenRouter** (`OPENROUTER_API_KEY`, begins `sk-or-`): maps `jev-latest` to `typesafe/jev-1.13`.
 - **Cloudflare** (`JEV_CLOUDFLARE_API_TOKEN` preferred over `CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID`): maps `jev-latest` to `typesafe/jev`.
-- **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`): selects `typesafe-ai/jev` unless given a `typesafe-ai/` model.
+- **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`, optional `JEV_VERCEL_ZERO_DATA_RETENTION`): selects `typesafe-ai/jev` unless given a `typesafe-ai/` model. Set `JEV_VERCEL_ZERO_DATA_RETENTION=1` (or `true`) to send `providerOptions.gateway.zeroDataRetention: true` on every request, so the gateway only routes to providers that support zero data retention and fails the request otherwise. Off by default; ignored by the other carriers.
 
 Set `JEV_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one.
 
