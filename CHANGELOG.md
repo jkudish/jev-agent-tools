@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - OpenRouter: `jev-latest` uses OpenRouter's `~typesafe/jev-latest` alias, an explicit alias is no longer double-prefixed, and results report the returned snapshot. Explicit version pins are unchanged. Reported in [jev-mcp#55](https://github.com/jkudish/jev-mcp/issues/55).
 - Vercel transport: opt-in Gateway zero data retention routing with `JEV_VERCEL_ZERO_DATA_RETENTION=1` or `true`. Invalid values fail before a request is sent. Via [#7](https://github.com/jkudish/jev-agent-tools/pull/7), contributed by [@lloydsilvertwo](https://github.com/lloydsilvertwo).
