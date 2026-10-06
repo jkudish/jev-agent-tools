@@ -278,13 +278,37 @@ test("Vercel factory forwards evaluate request and pure adaptation preserves con
 
 test("Vercel zero data retention is opt-in via JEV_VERCEL_ZERO_DATA_RETENTION", async () => {
   const result = { answers: { item: answers.item, yes: { type: "boolean", probability: 0.7 } }, usage: { inputTokens: 13, outputTokens: 3 } };
-  for (const [value, expected] of [[undefined, false], ["", false], ["0", false], ["false", false], ["1", true], ["true", true], ["TRUE", true]]) {
+  for (const [value, expected] of [[undefined, false], ["", false], ["0", false], ["false", false], ["FaLsE", false], ["1", true], ["true", true], ["TRUE", true]]) {
     let call;
     const env = { AI_GATEWAY_API_KEY: "ai-secret", ...(value === undefined ? {} : { JEV_VERCEL_ZERO_DATA_RETENTION: value }) };
     await askJev(createVercelDriver(async (args) => { call = args; return result; }).create(env), input);
     assert.equal("providerOptions" in call, expected, `value ${JSON.stringify(value)}`);
     if (expected) assert.deepEqual(call.providerOptions, { gateway: { zeroDataRetention: true } });
   }
+  for (const value of ["yes", "tru", " true ", "2"]) {
+    let calls = 0;
+    assert.throws(
+      () => createVercelDriver(async () => { calls++; return result; }).create({ AI_GATEWAY_API_KEY: "ai-secret", JEV_VERCEL_ZERO_DATA_RETENTION: value }),
+      /^Error: JEV_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true\.$/,
+    );
+    assert.equal(calls, 0);
+    let fetches = 0;
+    await withFetch(async () => { fetches++; return Response.json(result); }, async () => {
+      const rejectedResult = await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", JEV_PROVIDER: "vercel", JEV_VERCEL_ZERO_DATA_RETENTION: value } });
+      assert.deepEqual(rejectedResult, { ok: false, code: "configuration_error", message: "JEV_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true." });
+    });
+    assert.equal(fetches, 0);
+  }
+  const repeated = [];
+  const transport = createVercelDriver(async (args) => { repeated.push(args.providerOptions); return result; }).create({ AI_GATEWAY_API_KEY: "ai-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "true" });
+  await askJev(transport, input);
+  await askJev(transport, input);
+  assert.deepEqual(repeated, [{ gateway: { zeroDataRetention: true } }, { gateway: { zeroDataRetention: true } }]);
+  for (const env of [
+    { TYPESAFE_API_KEY: "ts-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "yes" },
+    { OPENROUTER_API_KEY: "sk-or-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "yes" },
+    { CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account", JEV_VERCEL_ZERO_DATA_RETENTION: "yes" },
+  ]) assert.notEqual(resolveTransport(env).name, "vercel");
   const bodies = [];
   await withFetch(async (url, init) => { bodies.push(JSON.parse(init.body)); return Response.json(result); }, async () => {
     await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "1" } });
@@ -292,6 +316,15 @@ test("Vercel zero data retention is opt-in via JEV_VERCEL_ZERO_DATA_RETENTION", 
   });
   assert.deepEqual(bodies[0].providerOptions, { gateway: { zeroDataRetention: true } });
   assert.equal("providerOptions" in bodies[1], false);
+  const zdrFailures = [];
+  await withFetch(async (url, init) => {
+    zdrFailures.push(JSON.parse(init.body));
+    return Response.json({ error: "body-secret", type: "no_providers_available" }, { status: 400 });
+  }, async () => {
+    rejected(await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", JEV_PROVIDER: "vercel", JEV_VERCEL_ZERO_DATA_RETENTION: "1" } }), "request_failed", /request failed/);
+  });
+  assert.equal(zdrFailures.length, 1);
+  assert.deepEqual(zdrFailures[0].providerOptions, { gateway: { zeroDataRetention: true } });
 });
 
 test("Vercel default fetch sends the evaluation protocol and never echoes HTTP bodies", async () => {

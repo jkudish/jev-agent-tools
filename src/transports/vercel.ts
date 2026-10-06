@@ -2,6 +2,12 @@ import type { BuiltinDriver } from "../provider.js";
 
 type Evaluation = (args: { apiKey: string; model: string; state: unknown; questions: Record<string, unknown>; signal: AbortSignal; providerOptions?: { gateway: { zeroDataRetention: true } } }) => Promise<any>;
 
+function zeroDataRetention(value: string | undefined): boolean {
+  if (value === undefined || value === "" || /^(0|false)$/i.test(value)) return false;
+  if (/^(1|true)$/i.test(value)) return true;
+  throw new Error("JEV_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true.");
+}
+
 async function evaluate({ apiKey, model, state, questions, signal, providerOptions }: Parameters<Evaluation>[0]): Promise<any> {
   const response = await fetch("https://ai-gateway.vercel.sh/v4/ai/evaluation-model", {
     method: "POST",
@@ -31,7 +37,7 @@ export function createVercelDriver(evaluateRequest: Evaluation = evaluate): Buil
     create(env) {
       this.assertConfigured(env);
       const key = env.AI_GATEWAY_API_KEY!;
-      const providerOptions = /^(1|true)$/i.test(env.JEV_VERCEL_ZERO_DATA_RETENTION ?? "") ? { gateway: { zeroDataRetention: true as const } } : undefined;
+      const providerOptions = zeroDataRetention(env.JEV_VERCEL_ZERO_DATA_RETENTION) ? { gateway: { zeroDataRetention: true as const } } : undefined;
       return {
         name: this.name,
         async ask({ state, questions, model, signal }) {

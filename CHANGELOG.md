@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Vercel transport: opt-in per-request zero data retention. With `JEV_VERCEL_ZERO_DATA_RETENTION=1` (or `true`), every request carries `providerOptions.gateway.zeroDataRetention: true`. Unset, the request body is unchanged. No effect on the TypeSafe, OpenRouter, or Cloudflare carriers.
+- Vercel transport: opt-in Gateway zero data retention routing with `JEV_VERCEL_ZERO_DATA_RETENTION=1` or `true`. Invalid values fail before a request is sent. Via [#7](https://github.com/jkudish/jev-agent-tools/pull/7), contributed by [@lloydsilvertwo](https://github.com/lloydsilvertwo).
 
 ## 0.1.4
 

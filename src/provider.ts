@@ -103,7 +103,7 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
     transport = config.transport ?? resolveTransport(config.env);
   } catch (error) {
     // Registry errors are fixed strings; never echo arbitrary driver exceptions.
-    const message = error instanceof Error && /^(Unknown JEV_PROVIDER|No TYPESAFE_API_KEY|JEV_PROVIDER=)/.test(error.message)
+    const message = error instanceof Error && /^(Unknown JEV_PROVIDER|No TYPESAFE_API_KEY|JEV_PROVIDER=|JEV_VERCEL_ZERO_DATA_RETENTION must)/.test(error.message)
       ? error.message : "Jev provider configuration failed";
     return { ok: false, code: "configuration_error", message };
   }
