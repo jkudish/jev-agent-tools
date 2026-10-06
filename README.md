@@ -38,7 +38,7 @@ else console.log(result.answer.refund.noul, result.usage, result.model);
 Auto-selection tries them in this order:
 
 - **TypeSafe** (`TYPESAFE_API_KEY`, optional `TYPESAFE_BASE_URL`): direct; sends the model you supply, usually `jev-latest`.
-- **OpenRouter** (`OPENROUTER_API_KEY`, begins `sk-or-`): maps `jev-latest` to `typesafe/jev-1.13`.
+- **OpenRouter** (`OPENROUTER_API_KEY`, begins `sk-or-`): maps `jev-latest` to OpenRouter's moving `~typesafe/jev-latest` alias. Pin a version, such as `typesafe/jev-1.13`, for reproducible routing. Results report the snapshot OpenRouter returns.
 - **Cloudflare** (`JEV_CLOUDFLARE_API_TOKEN` preferred over `CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID`): maps `jev-latest` to `typesafe/jev`.
 - **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`, optional `JEV_VERCEL_ZERO_DATA_RETENTION`): selects `typesafe-ai/jev` unless given a `typesafe-ai/` model.
   - Set `JEV_VERCEL_ZERO_DATA_RETENTION=1` or `true` to request [Vercel's zero data retention (ZDR) routing](https://vercel.com/docs/ai-gateway/security-and-compliance/zdr) on every request.

@@ -2,6 +2,13 @@ import type { BuiltinDriver } from "../provider.js";
 
 const TITLE = "jev-browser";
 const REFERER = "https://github.com/jkudish/jev-browser";
+const LATEST = "~typesafe/jev-latest";
+
+/** Map a Jev model name to OpenRouter's Decisions API model ID. */
+export function openrouterJevModel(model: string): string {
+  if (model === "jev-latest" || model === "typesafe/jev-latest" || model === LATEST) return LATEST;
+  return model.startsWith("typesafe/") ? model : `typesafe/${model}`;
+}
 
 export const openrouter: BuiltinDriver = {
   name: "openrouter",
@@ -15,8 +22,7 @@ export const openrouter: BuiltinDriver = {
     return {
       name: this.name,
       async ask({ state, questions, model, signal }) {
-        const effective = model === "jev-latest" ? "jev-1.13" : model;
-        const slug = effective.startsWith("typesafe/") ? effective : `typesafe/${effective}`;
+        const slug = openrouterJevModel(model);
         const response = await fetch("https://openrouter.ai/api/alpha/decisions", {
           method: "POST",
           headers: {
@@ -49,6 +55,9 @@ export const openrouter: BuiltinDriver = {
         if (usage !== undefined && (typeof usage !== "object" || usage === null || Array.isArray(usage))) {
           throw new Error(`OpenRouter decisions API HTTP ${response.status} (invalid usage; ${bytes} response bytes)`);
         }
+        // Report the effective snapshot. Fall back to the requested slug only
+        // when absent; malformed present values reach shared validation.
+        const effectiveModel = Object.hasOwn(body, "model") ? body.model : slug;
         return {
           answers: body.answers,
           // The decisions endpoint does not document usage; absence means zero.
@@ -56,7 +65,7 @@ export const openrouter: BuiltinDriver = {
             input_tokens: usage && Object.hasOwn(usage, "input_tokens") ? usage.input_tokens : 0,
             output_tokens: usage && Object.hasOwn(usage, "output_tokens") ? usage.output_tokens : 0,
           },
-          model: slug,
+          model: effectiveModel,
         };
       },
     };

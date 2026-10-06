@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ask, resolveTransport } from "../dist/index.js";
+import { ask, openrouterJevModel, resolveTransport } from "../dist/index.js";
 import { typesafe } from "../dist/transports/typesafe.js";
 import { openrouter } from "../dist/transports/openrouter.js";
 import { cloudflare } from "../dist/transports/cloudflare.js";
@@ -204,20 +204,34 @@ test("TypeSafe client binds key and base URL at creation, forwards request and c
 });
 
 test("OpenRouter maps latest and pinned slugs, sends exact envelope and redacts HTTP errors", async () => {
+  for (const [requested, expected] of [
+    ["jev-latest", "~typesafe/jev-latest"],
+    ["typesafe/jev-latest", "~typesafe/jev-latest"],
+    ["~typesafe/jev-latest", "~typesafe/jev-latest"],
+    ["jev-1.13", "typesafe/jev-1.13"],
+    ["typesafe/jev-1.13", "typesafe/jev-1.13"],
+  ]) assert.equal(openrouterJevModel(requested), expected);
   const calls = [];
   await withFetch(async (url, init) => {
     calls.push({ url, init });
-    return Response.json({ answers, usage });
+    return Response.json(calls.length === 1 ? { answers, usage, model: "typesafe/jev-1.13-20260917" } : { answers, usage });
   }, async () => {
     const transport = openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" });
-    assert.equal((await askJev(transport, input)).model, "typesafe/jev-1.13");
+    assert.equal((await askJev(transport, input)).model, "typesafe/jev-1.13-20260917");
     assert.equal((await askJev(transport, { ...input, model: "typesafe/jev-1.12" })).model, "typesafe/jev-1.12");
+    for (const model of ["typesafe/jev-latest", "~typesafe/jev-latest", "jev-1.13"]) await askJev(transport, { ...input, model });
     assert.equal(calls[0].url, "https://openrouter.ai/api/alpha/decisions");
     assert.equal(calls[0].init.method, "POST");
     assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sk-or-secret", "Content-Type": "application/json", "HTTP-Referer": "https://github.com/jkudish/jev-browser", "X-Title": "jev-browser", "X-OpenRouter-Title": "jev-browser" });
     assert.equal(calls[0].init.signal, signal);
-    assert.deepEqual(JSON.parse(calls[0].init.body), { model: "typesafe/jev-1.13", state: input.state, questions });
+    assert.deepEqual(JSON.parse(calls[0].init.body), { model: "~typesafe/jev-latest", state: input.state, questions });
+    assert.deepEqual(calls.map((call) => JSON.parse(call.init.body).model), ["~typesafe/jev-latest", "typesafe/jev-1.12", "~typesafe/jev-latest", "~typesafe/jev-latest", "typesafe/jev-1.13"]);
   });
+  for (const model of [null, 1, "", " "]) {
+    await withFetch(async () => Response.json({ answers, usage, model }), async () => {
+      rejected(await askJev(openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" }), input), "invalid_model", /question <response>.*model/);
+    });
+  }
   for (const response of [new Response("body-secret", { status: 403 }), new Response("body-secret", { status: 200 })]) {
     await withFetch(async () => response, async () => {
       rejected(await askJev(openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" }), input), "request_failed", /request failed/);
