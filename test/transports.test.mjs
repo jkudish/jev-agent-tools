@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ask, openrouterJevModel, resolveTransport } from "../dist/index.js";
+import { ask, openaiDecisionsModel, openrouterJevModel, resolveTransport } from "../dist/index.js";
 import { typesafe } from "../dist/transports/typesafe.js";
 import { openrouter } from "../dist/transports/openrouter.js";
 import { cloudflare } from "../dist/transports/cloudflare.js";
@@ -522,4 +522,122 @@ test("ask classifies transport error statuses defensively and never throws", asy
     const transport = { name: `status-${String(status)}`, ask: async () => { throw Object.assign(new Error("http"), { status }); } };
     rejected(await ask(input, { transport }), "request_failed", /request failed/);
   }
+});
+
+const openaiInput = {
+  state: { title: "Export fails in Safari" },
+  model: "jev-latest",
+  signal,
+  questions: {
+    done: { type: "noul", instructions: "The goal is achieved", criteria: { true: "Page shows the result", false: "Not yet" } },
+    route: { type: "choice", instructions: "Which team?", criteria: { billing: "Payments", technical: null } },
+    severity: { type: "score", instructions: "How severe?", criteria: ["Cosmetic", null, "Blocked"] },
+  },
+};
+const openaiWire = {
+  model: "gpt-6-luna",
+  answers: [
+    { type: "predicate", name: "done", probability: 0.3 },
+    { type: "choice", name: "route", choice: "technical", probabilities: [{ value: "billing", probability: 0.1 }, { value: "technical", probability: 0.9 }], confidence: 0.8 },
+    { type: "score", name: "severity", score: 1.21, probabilities: [{ value: 0, label: "0", probability: 0.02 }, { value: 1, label: "1", probability: 0.75 }, { value: 2, label: "2", probability: 0.23 }], confidence: 0.63 },
+  ],
+  usage: { input_tokens: 128, input_tokens_details: { cached_tokens: 0 }, output_tokens: 0, total_tokens: 128 },
+};
+
+test("OpenAI is explicit-only and prefers JEV_OPENAI_API_KEY", () => {
+  assert.throws(() => resolveTransport({ OPENAI_API_KEY: "sk-secret" }), /No TYPESAFE_API_KEY/);
+  assert.equal(resolveTransport({ OPENAI_API_KEY: "sk-secret", AI_GATEWAY_API_KEY: "ai-secret" }).name, "vercel");
+  assert.equal(resolveTransport({ OPENAI_API_KEY: "sk-secret", JEV_PROVIDER: "OpenAI" }).name, "openai");
+  assert.equal(resolveTransport({ JEV_OPENAI_API_KEY: "sk-secret", JEV_PROVIDER: "openai" }).name, "openai");
+  assert.throws(() => resolveTransport({ JEV_PROVIDER: "openai", TYPESAFE_API_KEY: "ts-secret" }), (error) => error.message.startsWith("JEV_PROVIDER=openai") && /OPENAI_API_KEY/.test(error.message));
+  assert.equal(openaiDecisionsModel("jev-latest"), "gpt-6-luna");
+  assert.equal(openaiDecisionsModel("gpt-6-luna-2026-09-29"), "gpt-6-luna-2026-09-29");
+});
+
+test("OpenAI translates Jev questions and answers through the shared validator", async () => {
+  const requests = [];
+  await withFetch(async (url, init) => {
+    requests.push({ url, init });
+    return Response.json(openaiWire);
+  }, async () => {
+    const result = await ask(openaiInput, { env: { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret", JEV_OPENAI_API_KEY: "high-secret" } });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(result.provider, "openai");
+    assert.equal(result.model, "gpt-6-luna");
+    assert.deepEqual(result.usage, { input_tokens: 128, output_tokens: 0 });
+    assert.deepEqual(result.answer, {
+      done: { type: "noul", noul: 0.3 },
+      route: { type: "choice", choice: "technical", probabilities: { billing: 0.1, technical: 0.9 }, confidence: 0.8 },
+      severity: { type: "score", score: 1.21, probabilities: { "0": 0.02, "1": 0.75, "2": 0.23 }, confidence: 0.63 },
+    });
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://api.openai.com/v1/decisions");
+  assert.equal(requests[0].init.headers.Authorization, "Bearer high-secret");
+  assert.deepEqual(JSON.parse(requests[0].init.body), {
+    model: "gpt-6-luna",
+    input: '{"title":"Export fails in Safari"}',
+    questions: [
+      { type: "predicate", name: "done", instructions: "The goal is achieved\nAnswer true when: Page shows the result\nAnswer false when: Not yet" },
+      { type: "choice", name: "route", instructions: "Which team?", choices: [{ value: "billing", description: "Payments" }, { value: "technical" }] },
+      { type: "score", name: "severity", instructions: "How severe?", levels: [{ label: "0", description: "Cosmetic" }, { label: "1" }, { label: "2", description: "Blocked" }] },
+    ],
+  });
+  // A string state is sent as-is, not JSON-quoted.
+  await withFetch(async (_url, init) => {
+    assert.equal(JSON.parse(init.body).input, "plain text");
+    return Response.json(openaiWire);
+  }, async () => assert.equal((await ask({ ...openaiInput, state: "plain text" }, { env: { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" } })).ok, true));
+});
+
+test("OpenAI refusals, duplicate names, and typed choice values fail closed", async () => {
+  const env = { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" };
+  const run = (answers) => withFetch(async () => Response.json({ ...openaiWire, answers }), () => ask(openaiInput, { env }));
+  rejected(await run([openaiWire.answers[0], { type: "refusal", name: "route" }, openaiWire.answers[2]]), "refused", /question route: provider declined/);
+  rejected(await run([...openaiWire.answers, openaiWire.answers[0]]), "malformed_answer", /answers must be an object/);
+  rejected(await run([openaiWire.answers[0], { ...openaiWire.answers[1], probabilities: [{ value: true, probability: 0.1 }, { value: "technical", probability: 0.9 }] }, openaiWire.answers[2]]), "invalid_distribution", /question route/);
+  rejected(await run({ done: { type: "noul", noul: 0.3 } }), "malformed_answer", /answers must be an object/);
+  let sent = 0;
+  await withFetch(async () => { sent++; return Response.json(openaiWire); }, async () => {
+    rejected(await ask({ ...openaiInput, questions: { odd: { type: "rank" } } }, { env }), "request_failed", /provider openai: request failed$/);
+  });
+  assert.equal(sent, 0);
+  await withFetch(async () => Response.json({ error: { message: "body-secret" } }, { status: 401 }), async () => {
+    rejected(await ask(openaiInput, { env }), "request_failed", /HTTP 401/);
+  });
+});
+
+test("OpenAI splits requests above 200 questions and merges answers and usage", async () => {
+  const many = Object.fromEntries(Array.from({ length: 250 }, (_, i) => [`rel_${i}`, { type: "noul", instructions: `Is ${i} relevant?` }]));
+  const sizes = [];
+  const reply = (body, usage) => Response.json({ model: "gpt-6-luna", usage, answers: body.questions.map((q) => ({ type: "predicate", name: q.name, probability: 0.5 })) });
+  const env = { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" };
+  await withFetch(async (_url, init) => {
+    const body = JSON.parse(init.body);
+    sizes.push(body.questions.length);
+    return reply(body, { input_tokens: body.questions.length, output_tokens: 0 });
+  }, async () => {
+    const result = await ask({ ...openaiInput, questions: many }, { env });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(Object.keys(result.answer).length, 250);
+    assert.deepEqual(result.usage, { input_tokens: 250, output_tokens: 0 });
+  });
+  assert.deepEqual(sizes.sort((a, b) => b - a), [200, 50]);
+  // One malformed counter in either chunk is invalid usage, never a plausible sum.
+  await withFetch(async (_url, init) => {
+    const body = JSON.parse(init.body);
+    return reply(body, { input_tokens: body.questions.length === 50 ? -1 : 200, output_tokens: 0 });
+  }, async () => rejected(await ask({ ...openaiInput, questions: many }, { env }), "invalid_usage", /usage/));
+});
+
+test("score accepts an integer level or the distribution mean, nothing else", async () => {
+  const score = { state: null, model: "jev", signal, questions: { rank: { type: "score", criteria: ["poor", "good", "great"] } } };
+  const reply = (value, probabilities = { "0": 0, "1": 0.34, "2": 0.66 }) => carrier({ answers: { rank: { type: "score", score: value, probabilities, confidence: 0.48 } } });
+  // Live TypeSafe reply: mean 1.66 reported as 1.65 after rounding.
+  assert.equal((await askJev(reply(1.65), score)).answer.rank.score, 1.65);
+  assert.equal((await askJev(reply(1), score)).ok, true);
+  rejected(await askJev(reply(0.5), score), "invalid_distribution", /does not match the distribution mean/);
+  rejected(await askJev(reply(1.6), score), "invalid_distribution", /does not match/);
+  rejected(await askJev(reply(2.01), score), "invalid_choice", /outside criteria levels/);
+  rejected(await askJev(reply(-0.01), score), "invalid_choice", /outside criteria levels/);
 });

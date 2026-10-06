@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- OpenAI Decisions transport (spike, public beta API): `JEV_PROVIDER=openai` with `JEV_OPENAI_API_KEY` or `OPENAI_API_KEY`, optional `JEV_OPENAI_BASE_URL`. Explicit-only: never auto-detected. `jev-latest` maps to `gpt-6-luna`; other model names pass through. Noul true/false descriptions are folded into predicate instructions, and requests above 200 questions are split into concurrent chunks.
+- Score answers may be fractional. A non-integer score is accepted when it matches the probability-weighted mean of its distribution within two-decimal rounding; integer level scores are unchanged. Live TypeSafe score answers (for example 1.65) were previously rejected.
+- New rejection code `refused` when a carrier declines to answer a question.
+- TypeSafe and OpenAI share one retry helper; TypeSafe behavior and messages are unchanged.
+
 ## 0.2.0
 
 - OpenRouter: `jev-latest` uses OpenRouter's `~typesafe/jev-latest` alias, an explicit alias is no longer double-prefixed, and results report the returned snapshot. Explicit version pins are unchanged. Reported in [jev-mcp#55](https://github.com/jkudish/jev-mcp/issues/55).
