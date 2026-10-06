@@ -38,9 +38,13 @@ else console.log(result.answer.refund.noul, result.usage, result.model);
 Auto-selection tries them in this order:
 
 - **TypeSafe** (`TYPESAFE_API_KEY`, optional `TYPESAFE_BASE_URL`): direct; sends the model you supply, usually `jev-latest`.
-- **OpenRouter** (`OPENROUTER_API_KEY`, begins `sk-or-`): maps `jev-latest` to `typesafe/jev-1.13`.
+- **OpenRouter** (`OPENROUTER_API_KEY`, begins `sk-or-`): maps `jev-latest` to OpenRouter's moving `~typesafe/jev-latest` alias. Pin a version, such as `typesafe/jev-1.13`, for reproducible routing. Results report the snapshot OpenRouter returns.
 - **Cloudflare** (`JEV_CLOUDFLARE_API_TOKEN` preferred over `CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID`): maps `jev-latest` to `typesafe/jev`.
-- **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`): selects `typesafe-ai/jev` unless given a `typesafe-ai/` model.
+- **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`, optional `JEV_VERCEL_ZERO_DATA_RETENTION`): selects `typesafe-ai/jev` unless given a `typesafe-ai/` model.
+  - Set `JEV_VERCEL_ZERO_DATA_RETENTION=1` or `true` to request [Vercel's zero data retention (ZDR) routing](https://vercel.com/docs/ai-gateway/security-and-compliance/zdr) on every request.
+  - Unset, empty, `0`, or `false` leaves the request body unchanged. Any other value is a configuration error before a request is sent.
+  - Use `JEV_PROVIDER=vercel` when every judgment must use this restriction; auto-selection prefers other configured carriers, which ignore the setting.
+  - Vercel offers per-request ZDR on Pro and Enterprise plans. It filters Gateway routes, including fallbacks, under Vercel and provider policies; review [the listed provider terms and exceptions](https://vercel.com/docs/ai-gateway/security-and-compliance/zdr#zdr-providers-and-policies). It does not control your application, MCP client, logs, browser artifacts, or other model providers.
 
 Set `JEV_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one.
 

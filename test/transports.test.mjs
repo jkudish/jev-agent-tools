@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ask, resolveTransport } from "../dist/index.js";
+import { ask, openrouterJevModel, resolveTransport } from "../dist/index.js";
 import { typesafe } from "../dist/transports/typesafe.js";
 import { openrouter } from "../dist/transports/openrouter.js";
 import { cloudflare } from "../dist/transports/cloudflare.js";
@@ -204,20 +204,34 @@ test("TypeSafe client binds key and base URL at creation, forwards request and c
 });
 
 test("OpenRouter maps latest and pinned slugs, sends exact envelope and redacts HTTP errors", async () => {
+  for (const [requested, expected] of [
+    ["jev-latest", "~typesafe/jev-latest"],
+    ["typesafe/jev-latest", "~typesafe/jev-latest"],
+    ["~typesafe/jev-latest", "~typesafe/jev-latest"],
+    ["jev-1.13", "typesafe/jev-1.13"],
+    ["typesafe/jev-1.13", "typesafe/jev-1.13"],
+  ]) assert.equal(openrouterJevModel(requested), expected);
   const calls = [];
   await withFetch(async (url, init) => {
     calls.push({ url, init });
-    return Response.json({ answers, usage });
+    return Response.json(calls.length === 1 ? { answers, usage, model: "typesafe/jev-1.13-20260917" } : { answers, usage });
   }, async () => {
     const transport = openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" });
-    assert.equal((await askJev(transport, input)).model, "typesafe/jev-1.13");
+    assert.equal((await askJev(transport, input)).model, "typesafe/jev-1.13-20260917");
     assert.equal((await askJev(transport, { ...input, model: "typesafe/jev-1.12" })).model, "typesafe/jev-1.12");
+    for (const model of ["typesafe/jev-latest", "~typesafe/jev-latest", "jev-1.13"]) await askJev(transport, { ...input, model });
     assert.equal(calls[0].url, "https://openrouter.ai/api/alpha/decisions");
     assert.equal(calls[0].init.method, "POST");
     assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sk-or-secret", "Content-Type": "application/json", "HTTP-Referer": "https://github.com/jkudish/jev-browser", "X-Title": "jev-browser", "X-OpenRouter-Title": "jev-browser" });
     assert.equal(calls[0].init.signal, signal);
-    assert.deepEqual(JSON.parse(calls[0].init.body), { model: "typesafe/jev-1.13", state: input.state, questions });
+    assert.deepEqual(JSON.parse(calls[0].init.body), { model: "~typesafe/jev-latest", state: input.state, questions });
+    assert.deepEqual(calls.map((call) => JSON.parse(call.init.body).model), ["~typesafe/jev-latest", "typesafe/jev-1.12", "~typesafe/jev-latest", "~typesafe/jev-latest", "typesafe/jev-1.13"]);
   });
+  for (const model of [null, 1, "", " "]) {
+    await withFetch(async () => Response.json({ answers, usage, model }), async () => {
+      rejected(await askJev(openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" }), input), "invalid_model", /question <response>.*model/);
+    });
+  }
   for (const response of [new Response("body-secret", { status: 403 }), new Response("body-secret", { status: 200 })]) {
     await withFetch(async () => response, async () => {
       rejected(await askJev(openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" }), input), "request_failed", /request failed/);
@@ -274,6 +288,57 @@ test("Vercel factory forwards evaluate request and pure adaptation preserves con
   rejected(await askJev(failing.create({ AI_GATEWAY_API_KEY: "ai-secret" }), input), "request_failed", /request failed/);
   const malformed = createVercelDriver(async () => ({ ...result, answers: { item: raw.item } }));
   rejected(await askJev(malformed.create({ AI_GATEWAY_API_KEY: "ai-secret" }), input), "answer_id_mismatch", /provider vercel question yes.*missing answer/);
+});
+
+test("Vercel zero data retention is opt-in via JEV_VERCEL_ZERO_DATA_RETENTION", async () => {
+  const result = { answers: { item: answers.item, yes: { type: "boolean", probability: 0.7 } }, usage: { inputTokens: 13, outputTokens: 3 } };
+  for (const [value, expected] of [[undefined, false], ["", false], ["0", false], ["false", false], ["FaLsE", false], ["1", true], ["true", true], ["TRUE", true]]) {
+    let call;
+    const env = { AI_GATEWAY_API_KEY: "ai-secret", ...(value === undefined ? {} : { JEV_VERCEL_ZERO_DATA_RETENTION: value }) };
+    await askJev(createVercelDriver(async (args) => { call = args; return result; }).create(env), input);
+    assert.equal("providerOptions" in call, expected, `value ${JSON.stringify(value)}`);
+    if (expected) assert.deepEqual(call.providerOptions, { gateway: { zeroDataRetention: true } });
+  }
+  for (const value of ["yes", "tru", " true ", "2"]) {
+    let calls = 0;
+    assert.throws(
+      () => createVercelDriver(async () => { calls++; return result; }).create({ AI_GATEWAY_API_KEY: "ai-secret", JEV_VERCEL_ZERO_DATA_RETENTION: value }),
+      /^Error: JEV_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true\.$/,
+    );
+    assert.equal(calls, 0);
+    let fetches = 0;
+    await withFetch(async () => { fetches++; return Response.json(result); }, async () => {
+      const rejectedResult = await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", JEV_PROVIDER: "vercel", JEV_VERCEL_ZERO_DATA_RETENTION: value } });
+      assert.deepEqual(rejectedResult, { ok: false, code: "configuration_error", message: "JEV_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true." });
+    });
+    assert.equal(fetches, 0);
+  }
+  const repeated = [];
+  const transport = createVercelDriver(async (args) => { repeated.push(args.providerOptions); return result; }).create({ AI_GATEWAY_API_KEY: "ai-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "true" });
+  await askJev(transport, input);
+  await askJev(transport, input);
+  assert.deepEqual(repeated, [{ gateway: { zeroDataRetention: true } }, { gateway: { zeroDataRetention: true } }]);
+  for (const env of [
+    { TYPESAFE_API_KEY: "ts-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "yes" },
+    { OPENROUTER_API_KEY: "sk-or-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "yes" },
+    { CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account", JEV_VERCEL_ZERO_DATA_RETENTION: "yes" },
+  ]) assert.notEqual(resolveTransport(env).name, "vercel");
+  const bodies = [];
+  await withFetch(async (url, init) => { bodies.push(JSON.parse(init.body)); return Response.json(result); }, async () => {
+    await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "1" } });
+    await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret" } });
+  });
+  assert.deepEqual(bodies[0].providerOptions, { gateway: { zeroDataRetention: true } });
+  assert.equal("providerOptions" in bodies[1], false);
+  const zdrFailures = [];
+  await withFetch(async (url, init) => {
+    zdrFailures.push(JSON.parse(init.body));
+    return Response.json({ error: "body-secret", type: "no_providers_available" }, { status: 400 });
+  }, async () => {
+    rejected(await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", JEV_PROVIDER: "vercel", JEV_VERCEL_ZERO_DATA_RETENTION: "1" } }), "request_failed", /request failed/);
+  });
+  assert.equal(zdrFailures.length, 1);
+  assert.deepEqual(zdrFailures[0].providerOptions, { gateway: { zeroDataRetention: true } });
 });
 
 test("Vercel default fetch sends the evaluation protocol and never echoes HTTP bodies", async () => {
