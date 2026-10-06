@@ -583,6 +583,16 @@ test("OpenAI translates Jev questions and answers through the shared validator",
       { type: "score", name: "severity", instructions: "How severe?", levels: [{ label: "0", description: "Cosmetic" }, { label: "1" }, { label: "2", description: "Blocked" }] },
     ],
   });
+  // Structured instructions (jev-mcp classify sends {task, item}) must reach the model, not vanish.
+  await withFetch(async (_url, init) => {
+    const sent = JSON.parse(init.body).questions;
+    assert.equal(sent[0].instructions, '{"task":"Which class?","item":{"id":"i0","text":"Charged twice"}}');
+    assert.equal(sent[1].instructions, "");
+    return Response.json({ model: "gpt-6-luna", answers: [{ type: "choice", name: "i0", choice: "a", probabilities: [{ value: "a", probability: 1 }, { value: "b", probability: 0 }] }, { type: "predicate", name: "bare", probability: 0.5 }] });
+  }, async () => assert.equal((await ask({ ...openaiInput, questions: {
+    i0: { type: "choice", instructions: { task: "Which class?", item: { id: "i0", text: "Charged twice" } }, criteria: { a: null, b: null } },
+    bare: { type: "noul", instructions: null },
+  } }, { env: { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" } })).ok, true));
   // A string state is sent as-is, not JSON-quoted.
   await withFetch(async (_url, init) => {
     assert.equal(JSON.parse(init.body).input, "plain text");
