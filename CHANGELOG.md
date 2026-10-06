@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- OpenAI Decisions transport (spike, public beta API): `JEV_PROVIDER=openai` with `JEV_OPENAI_API_KEY` or `OPENAI_API_KEY`, optional `JEV_OPENAI_BASE_URL`. Explicit-only: never auto-detected. `jev-latest` maps to `gpt-6-luna`; other model names pass through. Noul true/false descriptions are folded into predicate instructions, and requests above 200 questions are split into concurrent chunks.
+- Score answers may be fractional. A non-integer score is accepted when it matches the probability-weighted mean of its distribution within two-decimal rounding; integer level scores are unchanged. Live TypeSafe score answers (for example 1.65) were previously rejected.
+- New rejection code `refused` when a carrier declines to answer a question.
+- TypeSafe and OpenAI share one retry helper; TypeSafe behavior and messages are unchanged.
+
 ## 0.2.1
 
 - Valid near-tie Jev choices are no longer rejected for a one-step probability discrepancy; the reported choice and probabilities are preserved. Fixes [#10](https://github.com/jkudish/jev-agent-tools/issues/10), reported by [@kittimzhe](https://github.com/kittimzhe).
