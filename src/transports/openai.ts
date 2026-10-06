@@ -31,7 +31,9 @@ const described = (value: unknown): value is string => typeof value === "string"
  */
 export function toDecisionQuestion(name: string, question: unknown): DecisionQuestion {
   const q = record(question) ? question : {};
-  const instructions = typeof q.instructions === "string" ? q.instructions : "";
+  // Jev instructions may be structured (e.g. {task, item}); OpenAI takes text.
+  const instructions = typeof q.instructions === "string" ? q.instructions
+    : q.instructions === null || q.instructions === undefined ? "" : JSON.stringify(q.instructions);
   if (q.type === "noul") {
     const outcomes = record(q.criteria) ? q.criteria : {};
     const lines = [instructions];
