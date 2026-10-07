@@ -4,8 +4,8 @@ const TITLE = "discern";
 const REFERER = "https://github.com/jkudish/discern-agent-tools";
 const LATEST = "~typesafe/jev-latest";
 
-/** Map a Jev model name to OpenRouter's Decisions API model ID. */
-export function openrouterJevModel(model: string): string {
+/** Map a model name to OpenRouter's Decisions API model ID. */
+export function openrouterModel(model: string): string {
   if (model === "jev-latest" || model === "typesafe/jev-latest" || model === LATEST) return LATEST;
   return model.startsWith("typesafe/") ? model : `typesafe/${model}`;
 }
@@ -22,7 +22,7 @@ export const openrouter: BuiltinDriver = {
     return {
       name: this.name,
       async ask({ state, questions, model, signal }) {
-        const slug = openrouterJevModel(model);
+        const slug = openrouterModel(model);
         const response = await fetch("https://openrouter.ai/api/alpha/decisions", {
           method: "POST",
           headers: {
@@ -71,3 +71,6 @@ export const openrouter: BuiltinDriver = {
     };
   },
 };
+
+/** @deprecated Use openrouterModel. Removed in 2.0. */
+export const openrouterJevModel = openrouterModel;
