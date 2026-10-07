@@ -2,6 +2,7 @@ import { typesafe } from "./transports/typesafe.js";
 import { openrouter } from "./transports/openrouter.js";
 import { cloudflare } from "./transports/cloudflare.js";
 import { vercel } from "./transports/vercel.js";
+import { openai } from "./transports/openai.js";
 
 export interface JevTransportInput {
   state: unknown;
@@ -22,7 +23,9 @@ export interface JevTransport {
 }
 
 export interface BuiltinDriver {
-  readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel";
+  readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel" | "openai";
+  /** Never auto-detected; selected only by JEV_PROVIDER. */
+  readonly explicitOnly?: true;
   isConfigured(env: Env): boolean;
   assertConfigured(env: Env): void;
   create(env: Env): JevTransport;
@@ -33,9 +36,11 @@ export type Env = Record<string, string | undefined>;
 export type JevAnswer =
   | { type: "noul"; noul: number }
   | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number | null }
+  // Score is the probability-weighted mean of level indices (it can fall
+  // between levels); some carriers report an integer level instead.
   | { type: "score"; score: number; probabilities: Record<string, number>; confidence: number | null };
 
-export type RejectionCode = "request_failed" | "rate_limited" | "unavailable" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "invalid_confidence" | "invalid_usage" | "invalid_model";
+export type RejectionCode = "request_failed" | "rate_limited" | "unavailable" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "refused" | "invalid_confidence" | "invalid_usage" | "invalid_model";
 
 export type AskResult =
   | { ok: true; answer: Record<string, JevAnswer>; usage: JevTransportReply["usage"]; model: string; provider: string }
@@ -43,13 +48,13 @@ export type AskResult =
 
 export interface AskConfig { env?: Env; transport?: JevTransport }
 
-const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel];
+const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel, openai];
 
 export function resolveTransport(env: Env = process.env): JevTransport {
   const explicit = (env.JEV_PROVIDER ?? "auto").toLowerCase();
   if (explicit !== "auto") {
     const driver = drivers.find((candidate) => candidate.name === explicit);
-    if (!driver) throw new Error("Unknown JEV_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, or auto.");
+    if (!driver) throw new Error("Unknown JEV_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, openai, or auto.");
     try {
       driver.assertConfigured(env);
     } catch (error) {
@@ -57,9 +62,9 @@ export function resolveTransport(env: Env = process.env): JevTransport {
     }
     return driver.create(env);
   }
-  const driver = drivers.find((candidate) => candidate.isConfigured(env));
+  const driver = drivers.find((candidate) => !candidate.explicitOnly && candidate.isConfigured(env));
   if (!driver) {
-    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY found. Set one, or JEV_PROVIDER to choose explicitly.");
+    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY found. Set one, or JEV_PROVIDER to choose explicitly (JEV_PROVIDER=openai uses JEV_OPENAI_API_KEY or OPENAI_API_KEY).");
   }
   return driver.create(env);
 }
@@ -108,7 +113,7 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
     return { ok: false, code: "configuration_error", message };
   }
   // Injected transport names are untrusted and never included in error text.
-  const provider = typeof transport.name === "string" && /^(typesafe|openrouter|cloudflare|vercel|fixture)$/.test(transport.name) ? transport.name : "unknown";
+  const provider = typeof transport.name === "string" && /^(typesafe|openrouter|cloudflare|vercel|openai|fixture)$/.test(transport.name) ? transport.name : "unknown";
   let reply: JevTransportReply;
   try {
     reply = await transport.ask(input);
@@ -140,6 +145,7 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
   for (const id of ids) {
     const question = input.questions[id];
     const answer = answers[id];
+    if (record(answer) && answer.type === "refusal") return fail(id, "refused", "provider declined to answer");
     if (!record(question) || !record(answer) || answer.type !== question.type) return fail(id, "malformed_answer", "missing answer or wrong type");
     if (question.type === "noul") {
       if (typeof answer.noul !== "number" || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1) return fail(id, "invalid_noul", "noul must be finite in [0,1]");
@@ -160,8 +166,20 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
       if (probabilities[answer.choice as string] + 0.001 < Math.max(...Object.values(probabilities))) return fail(id, "invalid_choice", "choice is not a distribution maximum");
       validated.push([id, { type: "choice", choice: answer.choice as string, probabilities, confidence: confidence as number | null }]);
     } else if (question.type === "score") {
-      if (typeof answer.score !== "number" || !Number.isInteger(answer.score) || !keys.includes(String(answer.score))) return fail(id, "invalid_choice", "score is outside criteria levels");
-      validated.push([id, { type: "score", score: answer.score as number, probabilities, confidence: confidence as number | null }]);
+      const score = answer.score;
+      if (typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > keys.length - 1) return fail(id, "invalid_choice", "score is outside criteria levels");
+      // An integer names a level. A fractional score is the distribution's
+      // mean, within the two-decimal rounding of each weighted probability.
+      if (!Number.isInteger(score)) {
+        let mean = 0;
+        let weight = 1;
+        for (const key of keys) {
+          mean += Number(key) * probabilities[key];
+          if (probabilities[key] > 0) weight += Number(key);
+        }
+        if (Math.abs(mean - score) > Math.max(0.02, ROUNDING_STEP * weight) + 1e-9) return fail(id, "invalid_distribution", "score does not match the distribution mean");
+      }
+      validated.push([id, { type: "score", score, probabilities, confidence: confidence as number | null }]);
     } else return fail(id, "malformed_answer", "unsupported question type");
   }
   if (!record(reply.usage) || !Number.isSafeInteger(reply.usage.input_tokens) || (reply.usage.input_tokens as number) < 0 || !Number.isSafeInteger(reply.usage.output_tokens) || (reply.usage.output_tokens as number) < 0) {

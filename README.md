@@ -17,7 +17,7 @@ npm install @jkudish/jev-agent-tools
 
 ## Result contract
 
-`ask(input, config?)` returns `Promise<{ ok: true, answer, usage, model, provider } | { ok: false, code, message }>` and never throws a verdict. The TypeSafe transport retries 408/409/429/5xx up to three attempts, honoring `Retry-After` within the caller's abort signal. Transport failures return `request_failed` (message includes the HTTP status when there is one), `rate_limited` when 429 retries are exhausted, or `unavailable` when 5xx retries are exhausted, and report the API's effective model rather than the requested alias; invalid responses return specific codes such as `answer_id_mismatch`, `invalid_distribution`, `invalid_noul`, `invalid_usage`, and `invalid_model`; configuration errors return `configuration_error`. Messages never include response bodies or credentials. The two consumers need different error behavior: jev-browser maps `!ok` to its own exception, while jev-mcp maps `!ok` to `invalid_response`.
+`ask(input, config?)` returns `Promise<{ ok: true, answer, usage, model, provider } | { ok: false, code, message }>` and never throws a verdict. The TypeSafe transport retries 408/409/429/5xx up to three attempts, honoring `Retry-After` within the caller's abort signal. Transport failures return `request_failed` (message includes the HTTP status when there is one), `rate_limited` when 429 retries are exhausted, or `unavailable` when 5xx retries are exhausted, and report the API's effective model rather than the requested alias; invalid responses return specific codes such as `refused` (the carrier declined a question), `answer_id_mismatch`, `invalid_distribution`, `invalid_noul`, `invalid_usage`, and `invalid_model`; configuration errors return `configuration_error`. Messages never include response bodies or credentials. The two consumers need different error behavior: jev-browser maps `!ok` to its own exception, while jev-mcp maps `!ok` to `invalid_response`.
 
 ```js
 import { ask } from "@jkudish/jev-agent-tools";
@@ -45,16 +45,21 @@ Auto-selection tries them in this order:
   - Unset, empty, `0`, or `false` leaves the request body unchanged. Any other value is a configuration error before a request is sent.
   - Use `JEV_PROVIDER=vercel` when every judgment must use this restriction; auto-selection prefers other configured carriers, which ignore the setting.
   - Vercel offers per-request ZDR on Pro and Enterprise plans. It filters Gateway routes, including fallbacks, under Vercel and provider policies; review [the listed provider terms and exceptions](https://vercel.com/docs/ai-gateway/security-and-compliance/zdr#zdr-providers-and-policies). It does not control your application, MCP client, logs, browser artifacts, or other model providers.
+- **OpenAI Decisions** (explicit only: `JEV_PROVIDER=openai`, with `JEV_OPENAI_API_KEY` preferred over `OPENAI_API_KEY`, optional `JEV_OPENAI_BASE_URL`): sends questions to [OpenAI's Decisions API](https://developers.openai.com/api/docs/guides/decisions) and maps `jev-latest` to `gpt-6-luna`.
+  - This is not Jev. It is a different model with its own calibration, so thresholds tuned on Jev need re-checking against your own labeled examples.
+  - It is never auto-detected, because `OPENAI_API_KEY` is common in environments that never chose it.
+  - Each noul is sent as a two-option choice over `true` and `false`, with its criteria as option descriptions; the noul is the weight on `true`. State is sent pretty-printed under a `State (JSON):` label, which costs about 35% more input tokens than compact JSON but agreed with Jev more often on captured requests. Limits: 255 choices, 10 score levels; requests above 200 questions are split into concurrent chunks.
+  - The API is in public beta and may change before GA.
 
-Set `JEV_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one.
+Set `JEV_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `openai`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one.
 
 ## Validation
 
-Every reply is checked before you see it. Validation requires exactly the requested answer IDs and criterion IDs, finite probabilities in [0,1] summing to within 0.01 of 1, and a selected Choice maximum within a 0.001 tie tolerance. Noul values must be in [0,1], confidence finite or null, usage counters non-negative safe integers, and the effective model nonempty. An invalid answer yields `ok: false` before any usage is credited, so a malformed response can never become a decision.
+Every reply is checked before you see it. Validation requires exactly the requested answer IDs and criterion IDs, finite probabilities in [0,1] summing to within 0.01 of 1, and a selected Choice maximum within a 0.001 tie tolerance. Score answers must be an integer level or, when fractional, the probability-weighted mean of their distribution within two-decimal rounding. Noul values must be in [0,1], confidence finite or null, usage counters non-negative safe integers, and the effective model nonempty. An invalid answer yields `ok: false` before any usage is credited, so a malformed response can never become a decision.
 
 ## Adding a provider
 
-The built-in list is a fixed, maintainer-curated set, currently: TypeSafe, OpenRouter, Cloudflare, and Vercel. PRs that add a new built-in carrier are generally not accepted unless sufficient demand is shown. If you want support for a new provider, the supported path is a third-party driver package. I will accept PRs that link third-party providers from the READMEs of this package, [jev-browser](https://github.com/jkudish/jev-browser), and [jev-mcp](https://github.com/jkudish/jev-mcp).
+The built-in list is a fixed, maintainer-curated set, currently: TypeSafe, OpenRouter, Cloudflare, Vercel, and OpenAI (explicit only). PRs that add a new built-in carrier are generally not accepted unless sufficient demand is shown. If you want support for a new provider, the supported path is a third-party driver package. I will accept PRs that link third-party providers from the READMEs of this package, [jev-browser](https://github.com/jkudish/jev-browser), and [jev-mcp](https://github.com/jkudish/jev-mcp).
 
 ### No code: inject a transport
 
@@ -104,7 +109,7 @@ Published a driver package? Open an issue or pull request on any of the three re
 
 ### Adding a built-in carrier
 
-The built-ins are a fixed, maintainer-curated set (TypeSafe, OpenRouter, Cloudflare, Vercel). New built-ins are generally not accepted unless sufficient demand is shown — open an issue first. The mechanics, for when one is accepted:
+The built-ins are a fixed, maintainer-curated set (TypeSafe, OpenRouter, Cloudflare, Vercel, OpenAI). New built-ins are generally not accepted unless sufficient demand is shown — open an issue first. The mechanics, for when one is accepted:
 
 - Add `src/transports/<name>.ts` exporting a driver: `name`, `isConfigured(env)`, `assertConfigured(env)`, and `create(env)` returning a `JevTransport`.
 - Register it in the `drivers` array in `src/provider.ts`, which widens the `BuiltinDriver` name union. Pick its auto-detection position deliberately; the order is the documented precedence.
