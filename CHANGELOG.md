@@ -2,23 +2,38 @@
 
 ## 1.0.0 (unreleased)
 
-Renamed from `@jkudish/jev-agent-tools` to `@jkudish/discern-agent-tools`. See the README's migration section.
+Renamed from `@jkudish/jev-agent-tools` to `@jkudish/discern-agent-tools`, because the package now carries Cloudflare's Clef and OpenAI's Decisions API alongside TypeSafe's Jev. See [Migrating from jev-agent-tools](README.md#migrating-from-jev-agent-tools).
 
-- Rename: the package, the `Discern*` type names (`Jev*` kept as deprecated aliases), `DISCERN_*` environment variables, and `Discern provider` error messages. Legacy `JEV_*` variables keep working through 1.x; a `JEV_`/`DISCERN_` pair with different values is a configuration error. New `normalizeDiscernEnv()` export. An empty `DISCERN_PROVIDER` now means `auto`. OpenRouter attribution title is `discern`.
-- OpenAI Decisions transport (public beta API): `DISCERN_PROVIDER=openai` with `DISCERN_OPENAI_API_KEY` or `OPENAI_API_KEY`, optional `DISCERN_OPENAI_BASE_URL`. Never auto-detected. `jev-latest` maps to `gpt-6-luna`. Nouls are sent as true/false choices carrying their criteria, state as labeled pretty-printed JSON, and requests above 200 questions are split into concurrent chunks.
-- `openrouterModel()` replaces `openrouterJevModel()`, which stays as a deprecated alias.
-- Score validation: a score must match its distribution, either as the probability-weighted mean (within two-decimal rounding) or as the most likely level. An integer score that is neither is now rejected.
-- Score answers may be fractional. A non-integer score is accepted when it matches the probability-weighted mean of its distribution within two-decimal rounding; integer level scores are unchanged. Live TypeSafe score answers (for example 1.65) were previously rejected.
-- Cloudflare's Clef decision models on the Cloudflare carrier: model `clef` or `clef-flash` (or any `@cf/` id). New `cloudflareModel()` export.
-- `ask()` owns the deadline: one timer and one caller listener per call, both released before it returns (an out-of-range `timeoutMs` is clamped). Fixed messages from built-in carriers, and OpenRouter's allow-listed detail, are shown even when a caller wraps a built-in transport; an injected transport's own messages never are.
-- One HTTP path for every carrier: retries on 408/409/429/5xx with `Retry-After`, never on network failures; `config.maxAttempts` (default 3) and a whole-request `config.timeoutMs` deadline (default 60000, new rejection code `timeout`); response bodies capped at 1,000,000 bytes while streaming. OpenRouter, Cloudflare, and Vercel previously had no retries.
-- Carriers moved here from discern-mcp: the `compatible` System One endpoint (`DISCERN_API_KEY` + `DISCERN_API_BASE_URL`, auto-selected only when nothing else is configured), `DISCERN_OPENROUTER_BASE_URL`, `DISCERN_CLOUDFLARE_BASE_URL`, and OpenRouter's allow-listed `max_tokens_exceeded` error code.
-- Neutral model alias `latest`: each carrier's current default model (Jev, or `gpt-6-luna` on OpenAI). `jev-latest` keeps working.
-- A malformed usage block is now `invalid_usage` on every carrier, not `request_failed`. Fixed built-in error messages (for example an oversized or unparseable response) are kept in `request_failed` messages.
-- `config.onReply(reply)`: observe the raw reply before validation without wrapping the transport, so built-in diagnostics are kept.
-- `JEV_` aliasing covers only the variables in the new `DISCERN_ENV_NAMES` export; `normalizeDiscernEnv(env, names)` accepts a consumer's list.
-- New rejection code `refused` when a carrier declines to answer a question.
-- TypeSafe and OpenAI share one retry helper; TypeSafe behavior is unchanged.
+### Rename
+
+- Package `@jkudish/discern-agent-tools`. Types are `DiscernTransport`, `DiscernTransportInput`, `DiscernTransportReply`, and `DiscernAnswer`; the `Jev*` names stay as deprecated aliases until 2.0. `openrouterModel()` replaces `openrouterJevModel()`, which also stays as an alias.
+- Environment variables are `DISCERN_*`. The listed legacy `JEV_*` names (the new `DISCERN_ENV_NAMES` export) keep working through 1.x; other `JEV_*` variables are ignored. A `JEV_`/`DISCERN_` pair with different values is a configuration error that names both variables and never their values. `normalizeDiscernEnv(env, names)` lets consumers alias their own variables.
+- Error messages start with `Discern provider <name>`. Rejection codes are unchanged; match on `code`.
+
+### New carriers and models
+
+- OpenAI Decisions (public beta): `DISCERN_PROVIDER=openai` with `DISCERN_OPENAI_API_KEY` or `OPENAI_API_KEY`, optional `DISCERN_OPENAI_BASE_URL`. Never auto-detected. Nouls are sent as true/false choices carrying their criteria, state as labeled pretty-printed JSON, and requests over 200 questions are split into concurrent chunks.
+- Cloudflare's Clef decision models on the Cloudflare carrier: model `clef` or `clef-flash`, or any `@cf/` id. New `cloudflareModel()` export.
+- The `compatible` carrier for any System One endpoint (`DISCERN_API_KEY` and `DISCERN_API_BASE_URL`), moved from discern-mcp. It is auto-selected only when no other carrier is configured.
+- The neutral model alias `latest` means each carrier's current default: Jev, or `gpt-6-luna` on OpenAI. `jev-latest` keeps working.
+
+### One transport path
+
+- Every carrier shares one HTTP path. It retries only 408, 409, 429, and 5xx, honoring `Retry-After`, and never re-sends after a network failure. `config.maxAttempts` (default 3) bounds attempts, and response bodies are capped at 1,000,000 bytes while they stream. OpenRouter, Cloudflare, and Vercel had no retries before.
+- `ask()` enforces one deadline over every attempt: `config.timeoutMs`, default 60000, with the new rejection code `timeout`. Its timer and listener are released before it returns.
+- `DISCERN_OPENROUTER_BASE_URL` and `DISCERN_CLOUDFLARE_BASE_URL` override those API roots. OpenRouter's token-limit failure reports `(HTTP 400, max_tokens_exceeded)`; no other upstream text reaches a message.
+- Fixed messages from built-in carriers (an unparseable or oversized response, for example) appear in `request_failed`, even when a caller wraps a built-in transport. An injected transport's own messages never do.
+
+### Validation
+
+- A score must agree with its distribution: either the probability-weighted mean within two-decimal rounding, so it can fall between levels, or the most likely level. Live TypeSafe answers such as 1.65 were rejected before, and an integer score that matches neither is rejected now.
+- New rejection code `refused` when a carrier declines a question. It fails the whole call.
+- A malformed usage block is `invalid_usage` on every carrier, never `request_failed`.
+
+### Other
+
+- `config.onReply(reply)` observes the raw reply before validation, for callers that judge each answer on their own.
+- An empty `DISCERN_PROVIDER` means `auto`. The OpenRouter attribution title is `discern`.
 
 ## 0.2.0
 
