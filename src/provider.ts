@@ -3,70 +3,115 @@ import { openrouter } from "./transports/openrouter.js";
 import { cloudflare } from "./transports/cloudflare.js";
 import { vercel } from "./transports/vercel.js";
 import { openai } from "./transports/openai.js";
+import { compatible } from "./transports/compatible.js";
+import { normalizeDiscernEnv } from "./env.js";
+import { CarrierFailure, CarrierHttpError } from "./transports/http.js";
 
-export interface JevTransportInput {
+export interface DiscernTransportInput {
   state: unknown;
   questions: Record<string, unknown>;
   model: string;
   signal: AbortSignal;
 }
 
-export interface JevTransportReply {
+export interface DiscernTransportReply {
   answers: unknown;
   usage: { input_tokens: number; output_tokens: number };
   model: string;
 }
 
-export interface JevTransport {
+export interface DiscernTransport {
   readonly name: string;
-  ask(input: JevTransportInput): Promise<JevTransportReply>;
+  ask(input: DiscernTransportInput): Promise<DiscernTransportReply>;
+}
+
+export interface TransportOptions {
+  /** Total HTTP attempts per request, including the first; clamped to 1..6. Default 3. */
+  maxAttempts?: number;
 }
 
 export interface BuiltinDriver {
-  readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel" | "openai";
-  /** Never auto-detected; selected only by JEV_PROVIDER. */
+  readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel" | "openai" | "compatible";
+  /** Never auto-detected; selected only by DISCERN_PROVIDER. */
   readonly explicitOnly?: true;
   isConfigured(env: Env): boolean;
   assertConfigured(env: Env): void;
-  create(env: Env): JevTransport;
+  create(env: Env, options?: TransportOptions): DiscernTransport;
 }
 
 export type Env = Record<string, string | undefined>;
 
-export type JevAnswer =
+/** @deprecated Use DiscernTransportInput. Removed in 2.0. */
+export type JevTransportInput = DiscernTransportInput;
+/** @deprecated Use DiscernTransportReply. Removed in 2.0. */
+export type JevTransportReply = DiscernTransportReply;
+/** @deprecated Use DiscernTransport. Removed in 2.0. */
+export type JevTransport = DiscernTransport;
+
+export type DiscernAnswer =
   | { type: "noul"; noul: number }
   | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number | null }
   // Score is the probability-weighted mean of level indices (it can fall
-  // between levels); some carriers report an integer level instead.
+  // between levels) or, for some carriers, the most likely level. Validation
+  // guarantees it is one of the two; use `probabilities` for anything finer.
   | { type: "score"; score: number; probabilities: Record<string, number>; confidence: number | null };
 
-export type RejectionCode = "request_failed" | "rate_limited" | "unavailable" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "refused" | "invalid_confidence" | "invalid_usage" | "invalid_model";
+/** @deprecated Use DiscernAnswer. Removed in 2.0. */
+export type JevAnswer = DiscernAnswer;
+
+export type RejectionCode = "request_failed" | "rate_limited" | "unavailable" | "timeout" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "refused" | "invalid_confidence" | "invalid_usage" | "invalid_model";
 
 export type AskResult =
-  | { ok: true; answer: Record<string, JevAnswer>; usage: JevTransportReply["usage"]; model: string; provider: string }
+  | { ok: true; answer: Record<string, DiscernAnswer>; usage: DiscernTransportReply["usage"]; model: string; provider: string }
   | { ok: false; code: RejectionCode; message: string };
 
-export interface AskConfig { env?: Env; transport?: JevTransport }
+export interface AskConfig extends TransportOptions {
+  env?: Env;
+  /** A run-bound transport to use instead of selecting one from the environment. */
+  transport?: DiscernTransport;
+  /** Whole-request deadline in milliseconds, covering every attempt. Default 60000. */
+  timeoutMs?: number;
+  /**
+   * Called with the transport's raw, unvalidated reply just before validation.
+   * For callers that judge each answer on their own (discern-mcp reports one
+   * bad answer as one invalid judgment instead of failing the call). Treat the
+   * reply as untrusted input.
+   */
+  onReply?: (reply: DiscernTransportReply) => void;
+}
 
-const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel, openai];
+export const DEFAULT_TIMEOUT_MS = 60_000;
+// setTimeout overflows past 2^31-1 ms and fires at once; never schedule beyond it.
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
-export function resolveTransport(env: Env = process.env): JevTransport {
-  const explicit = (env.JEV_PROVIDER ?? "auto").toLowerCase();
+// Auto-selection order; the generic compatible endpoint comes last, so it is
+// chosen only when no named carrier is configured.
+const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel, compatible, openai];
+const DRIVER_NAMES = drivers.map((driver) => driver.name);
+
+/**
+ * Pick a carrier from the environment. Legacy JEV_<X> variables are read as
+ * DISCERN_<X> through 1.x (see normalizeDiscernEnv); drivers see only the
+ * DISCERN_ names.
+ */
+export function resolveTransport(input: Env = process.env, options: TransportOptions = {}): DiscernTransport {
+  const { env } = normalizeDiscernEnv(input);
+  const explicit = (env.DISCERN_PROVIDER || "auto").toLowerCase();
   if (explicit !== "auto") {
     const driver = drivers.find((candidate) => candidate.name === explicit);
-    if (!driver) throw new Error("Unknown JEV_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, openai, or auto.");
+    if (!driver) throw new Error("Unknown DISCERN_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, compatible, openai, or auto.");
     try {
       driver.assertConfigured(env);
     } catch (error) {
-      throw new Error(`JEV_PROVIDER=${driver.name} but ${(error as Error).message}`);
+      throw new Error(`DISCERN_PROVIDER=${driver.name} but ${(error as Error).message}`);
     }
-    return driver.create(env);
+    return driver.create(env, options);
   }
   const driver = drivers.find((candidate) => !candidate.explicitOnly && candidate.isConfigured(env));
   if (!driver) {
-    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY found. Set one, or JEV_PROVIDER to choose explicitly (JEV_PROVIDER=openai uses JEV_OPENAI_API_KEY or OPENAI_API_KEY).");
+    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or DISCERN_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY, or DISCERN_API_KEY + DISCERN_API_BASE_URL found. Set one, or DISCERN_PROVIDER to choose explicitly (DISCERN_PROVIDER=openai uses DISCERN_OPENAI_API_KEY or OPENAI_API_KEY).");
   }
-  return driver.create(env);
+  return driver.create(env, options);
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -102,51 +147,82 @@ function distribution(value: unknown, keys: string[]): { ok: true; probabilities
   return { ok: true, probabilities: Object.fromEntries(entries) };
 }
 
-export async function ask(input: JevTransportInput, config: AskConfig = {}): Promise<AskResult> {
-  let transport: JevTransport;
+
+/** A guarded property read: an injected transport's error must not break the non-throwing contract through a throwing getter. */
+function read(error: unknown, key: string): unknown {
   try {
-    transport = config.transport ?? resolveTransport(config.env);
+    return (error as Record<string, unknown> | null | undefined)?.[key];
+  } catch {
+    return undefined;
+  }
+}
+
+export async function ask(input: DiscernTransportInput, config: AskConfig = {}): Promise<AskResult> {
+  let transport: DiscernTransport;
+  try {
+    transport = config.transport ?? resolveTransport(config.env, { maxAttempts: config.maxAttempts });
   } catch (error) {
     // Registry errors are fixed strings; never echo arbitrary driver exceptions.
-    const message = error instanceof Error && /^(Unknown JEV_PROVIDER|No TYPESAFE_API_KEY|JEV_PROVIDER=|JEV_VERCEL_ZERO_DATA_RETENTION must)/.test(error.message)
-      ? error.message : "Jev provider configuration failed";
+    const message = error instanceof Error && /^(Unknown DISCERN_PROVIDER|No TYPESAFE_API_KEY|DISCERN_PROVIDER=|DISCERN_VERCEL_ZERO_DATA_RETENTION must|DISCERN_[A-Z0-9_]+ and JEV_[A-Z0-9_]+ are both set)/.test(error.message)
+      ? error.message : "Discern provider configuration failed";
     return { ok: false, code: "configuration_error", message };
   }
   // Injected transport names are untrusted and never included in error text.
-  const provider = typeof transport.name === "string" && /^(typesafe|openrouter|cloudflare|vercel|openai|fixture)$/.test(transport.name) ? transport.name : "unknown";
-  let reply: JevTransportReply;
+  const provider = typeof transport.name === "string" && (DRIVER_NAMES as readonly string[]).concat("fixture").includes(transport.name) ? transport.name : "unknown";
+  // One deadline covers every attempt. It and the caller's signal reach the
+  // transport as one signal, owned here and released before returning, so no
+  // listener or timer outlives the call on any Node version.
+  const timeoutMs = Number.isInteger(config.timeoutMs) && (config.timeoutMs as number) > 0 ? Math.min(config.timeoutMs as number, MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
+  const caller = input.signal as AbortSignal | undefined;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException(`no answer within ${timeoutMs}ms`, "TimeoutError"));
+  }, timeoutMs);
+  const relay = () => controller.abort(caller?.reason);
+  if (caller?.aborted) relay();
+  else caller?.addEventListener?.("abort", relay, { once: true });
+  let reply: DiscernTransportReply;
   try {
-    reply = await transport.ask(input);
+    reply = await transport.ask({ ...input, signal: controller.signal });
   } catch (error) {
-    // Transports may attach a numeric `status` to HTTP failures; classify it
-    // for callers. The read itself is guarded — an injected transport whose
-    // error throws from a status getter must not break the non-throwing
-    // contract — and the status is a number, never a response body.
-    let status: unknown;
-    try {
-      status = (error as { status?: unknown } | null | undefined)?.status;
-    } catch {
-      status = undefined;
-    }
+    if (timedOut && !caller?.aborted) return { ok: false, code: "timeout", message: `Discern provider ${provider}: no answer within the ${timeoutMs}ms deadline` };
+    // HTTP failures carry a numeric `status`. Only built-in carriers
+    // (CarrierHttpError, constructible only inside this package) add an
+    // allow-listed `detail` code or a fixed message; never a response body.
+    const status = read(error, "status");
     const httpStatus = typeof status === "number" && Number.isInteger(status) && status >= 100 && status < 600 ? status : undefined;
-    if (httpStatus === 429) return { ok: false, code: "rate_limited", message: `Jev provider ${provider}: rate limited (HTTP 429)` };
-    if (httpStatus !== undefined && httpStatus >= 500) return { ok: false, code: "unavailable", message: `Jev provider ${provider}: unavailable (HTTP ${httpStatus})` };
-    if (httpStatus !== undefined) return { ok: false, code: "request_failed", message: `Jev provider ${provider}: request failed (HTTP ${httpStatus})` };
-    return { ok: false, code: "request_failed", message: `Jev provider ${provider}: request failed` };
+    const rawDetail = error instanceof CarrierHttpError ? error.detail : undefined;
+    const detail = typeof rawDetail === "string" && /^[a-z0-9_]{1,64}$/.test(rawDetail) ? `, ${rawDetail}` : "";
+    if (httpStatus === 429) return { ok: false, code: "rate_limited", message: `Discern provider ${provider}: rate limited (HTTP 429${detail})` };
+    if (httpStatus !== undefined && httpStatus >= 500) return { ok: false, code: "unavailable", message: `Discern provider ${provider}: unavailable (HTTP ${httpStatus}${detail})` };
+    if (httpStatus !== undefined) return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed (HTTP ${httpStatus}${detail})` };
+    const message = error instanceof CarrierFailure && !caller?.aborted ? ` (${error.message})` : "";
+    return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed${message}` };
+  } finally {
+    clearTimeout(timer);
+    caller?.removeEventListener?.("abort", relay);
   }
-  const fail = (id: string, code: RejectionCode, reason: string): AskResult => ({ ok: false, code, message: `Jev provider ${provider} question ${id}: ${reason}` });
+  try {
+    config.onReply?.(reply);
+  } catch {
+    // An observer must not break the non-throwing contract.
+  }
+  const fail = (id: string, code: RejectionCode, reason: string): AskResult => ({ ok: false, code, message: `Discern provider ${provider} question ${id}: ${reason}` });
   if (!record(input.questions)) return fail("<response>", "invalid_criteria", "questions must be an object");
   if (!record(reply) || !record(reply.answers)) return fail("<response>", "malformed_answer", "answers must be an object");
   const answers = reply.answers as Record<string, unknown>;
   const ids = Object.keys(input.questions);
   for (const id of ids) if (!Object.hasOwn(answers, id)) return fail(id, "answer_id_mismatch", "missing answer");
   if (Object.keys(answers).length !== ids.length) return fail("<response>", "answer_id_mismatch", "unexpected answer ID");
-  const validated: [string, JevAnswer][] = [];
+  const validated: [string, DiscernAnswer][] = [];
   for (const id of ids) {
     const question = input.questions[id];
     const answer = answers[id];
+    if (!record(question)) return fail(id, "malformed_answer", "missing answer or wrong type");
     if (record(answer) && answer.type === "refusal") return fail(id, "refused", "provider declined to answer");
-    if (!record(question) || !record(answer) || answer.type !== question.type) return fail(id, "malformed_answer", "missing answer or wrong type");
+    if (!record(answer) || answer.type !== question.type) return fail(id, "malformed_answer", "missing answer or wrong type");
     if (question.type === "noul") {
       if (typeof answer.noul !== "number" || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1) return fail(id, "invalid_noul", "noul must be finite in [0,1]");
       validated.push([id, { type: "noul", noul: answer.noul as number }]);
@@ -168,17 +244,19 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
     } else if (question.type === "score") {
       const score = answer.score;
       if (typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > keys.length - 1) return fail(id, "invalid_choice", "score is outside criteria levels");
-      // An integer names a level. A fractional score is the distribution's
-      // mean, within the two-decimal rounding of each weighted probability.
-      if (!Number.isInteger(score)) {
-        let mean = 0;
-        let weight = 1;
-        for (const key of keys) {
-          mean += Number(key) * probabilities[key];
-          if (probabilities[key] > 0) weight += Number(key);
-        }
-        if (Math.abs(mean - score) > Math.max(0.02, ROUNDING_STEP * weight) + 1e-9) return fail(id, "invalid_distribution", "score does not match the distribution mean");
+      // Carriers report either the distribution's mean (Jev, Clef, OpenAI;
+      // can fall between levels) or its most likely level (an integer). Accept
+      // a score only when it is one of those, so it always agrees with the
+      // distribution it came with.
+      let mean = 0;
+      let weight = 1;
+      for (const key of keys) {
+        mean += Number(key) * probabilities[key];
+        if (probabilities[key] > 0) weight += Number(key);
       }
+      const isMean = Math.abs(mean - score) <= Math.max(0.02, ROUNDING_STEP * weight) + 1e-9;
+      const isMostLikely = Number.isInteger(score) && probabilities[String(score)] + 0.001 >= Math.max(...Object.values(probabilities));
+      if (!isMean && !isMostLikely) return fail(id, "invalid_distribution", "score matches neither the distribution mean nor its most likely level");
       validated.push([id, { type: "score", score, probabilities, confidence: confidence as number | null }]);
     } else return fail(id, "malformed_answer", "unsupported question type");
   }
@@ -186,5 +264,5 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
     return fail("<response>", "invalid_usage", "usage counters must be non-negative safe integers");
   }
   if (typeof reply.model !== "string" || !reply.model.trim()) return fail("<response>", "invalid_model", "effective model must be nonempty");
-  return { ok: true, answer: Object.fromEntries(validated), usage: reply.usage as JevTransportReply["usage"], provider, model: reply.model as string };
+  return { ok: true, answer: Object.fromEntries(validated), usage: reply.usage as DiscernTransportReply["usage"], provider, model: reply.model as string };
 }

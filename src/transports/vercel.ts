@@ -1,29 +1,23 @@
 import type { BuiltinDriver } from "../provider.js";
+import { CarrierFailure, CarrierHttpError, postJson } from "./http.js";
 
-type Evaluation = (args: { apiKey: string; model: string; state: unknown; questions: Record<string, unknown>; signal: AbortSignal; providerOptions?: { gateway: { zeroDataRetention: true } } }) => Promise<any>;
+type Evaluation = (args: { apiKey: string; model: string; state: unknown; questions: Record<string, unknown>; signal: AbortSignal; maxAttempts?: number; providerOptions?: { gateway: { zeroDataRetention: true } } }) => Promise<any>;
 
 function zeroDataRetention(value: string | undefined): boolean {
   if (value === undefined || value === "" || /^(0|false)$/i.test(value)) return false;
   if (/^(1|true)$/i.test(value)) return true;
-  throw new Error("JEV_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true.");
+  throw new CarrierFailure("DISCERN_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true.");
 }
 
-async function evaluate({ apiKey, model, state, questions, signal, providerOptions }: Parameters<Evaluation>[0]): Promise<any> {
-  const response = await fetch("https://ai-gateway.vercel.sh/v4/ai/evaluation-model", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "ai-gateway-protocol-version": "0.0.1",
-      "ai-gateway-auth-method": "api-key",
-      "ai-evaluation-model-specification-version": "4",
-      "ai-model-id": model,
-    },
-    body: JSON.stringify({ state, questions, ...(providerOptions ? { providerOptions } : {}) }),
-    signal,
-  });
-  if (!response.ok) throw { statusCode: response.status };
-  return response.json();
+function evaluate({ apiKey, model, state, questions, signal, maxAttempts, providerOptions }: Parameters<Evaluation>[0]): Promise<any> {
+  return postJson("https://ai-gateway.vercel.sh/v4/ai/evaluation-model", {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    "ai-gateway-protocol-version": "0.0.1",
+    "ai-gateway-auth-method": "api-key",
+    "ai-evaluation-model-specification-version": "4",
+    "ai-model-id": model,
+  }, JSON.stringify({ state, questions, ...(providerOptions ? { providerOptions } : {}) }), { label: "Vercel AI Gateway", signal, maxAttempts });
 }
 
 // Internal factory seam: tests provide evaluate without replacing ESM exports.
@@ -32,12 +26,12 @@ export function createVercelDriver(evaluateRequest: Evaluation = evaluate): Buil
     name: "vercel",
     isConfigured: (env) => Boolean(env.AI_GATEWAY_API_KEY),
     assertConfigured(env) {
-      if (!this.isConfigured(env)) throw new Error("AI_GATEWAY_API_KEY is not set.");
+      if (!this.isConfigured(env)) throw new CarrierFailure("AI_GATEWAY_API_KEY is not set.");
     },
-    create(env) {
+    create(env, options = {}) {
       this.assertConfigured(env);
       const key = env.AI_GATEWAY_API_KEY!;
-      const providerOptions = zeroDataRetention(env.JEV_VERCEL_ZERO_DATA_RETENTION) ? { gateway: { zeroDataRetention: true as const } } : undefined;
+      const providerOptions = zeroDataRetention(env.DISCERN_VERCEL_ZERO_DATA_RETENTION) ? { gateway: { zeroDataRetention: true as const } } : undefined;
       return {
         name: this.name,
         async ask({ state, questions, model, signal }) {
@@ -49,24 +43,20 @@ export function createVercelDriver(evaluateRequest: Evaluation = evaluate): Buil
           const effective = model.startsWith("typesafe-ai/") ? model : "typesafe-ai/jev";
           let result: Awaited<ReturnType<Evaluation>>;
           try {
-            result = await evaluateRequest({ apiKey: key, model: effective, state, questions: Object.fromEntries(adaptedQuestions), signal, ...(providerOptions ? { providerOptions } : {}) });
+            result = await evaluateRequest({ apiKey: key, model: effective, state, questions: Object.fromEntries(adaptedQuestions), signal, maxAttempts: options.maxAttempts, ...(providerOptions ? { providerOptions } : {}) });
           } catch (error) {
             if (signal.aborted) throw signal.reason;
-            const status = (error as { statusCode?: unknown }).statusCode;
-            throw new Error(`Vercel AI Gateway ${typeof status === "number" ? `HTTP ${status}` : "request failed"} (response omitted)`);
+            if (error instanceof CarrierHttpError) throw error;
+            const status = (error as { statusCode?: unknown } | null)?.statusCode;
+            if (typeof status === "number") throw new CarrierHttpError("Vercel AI Gateway", status);
+            throw new CarrierFailure("Vercel AI Gateway request failed");
           }
+          if (!result || typeof result !== "object" || Array.isArray(result)) throw new CarrierFailure("Vercel AI Gateway returned an invalid envelope (response omitted)");
           const usage = result.usage;
-          if (usage !== undefined && (typeof usage !== "object" || usage === null || Array.isArray(usage))) {
-            throw new Error("Vercel AI Gateway invalid usage (response omitted)");
-          }
-          return {
-            answers: adaptVercelAnswers(result.answers, result.providerMetadata),
-            usage: {
-              input_tokens: usage && Object.hasOwn(usage, "inputTokens") ? usage.inputTokens as number : 0,
-              output_tokens: usage && Object.hasOwn(usage, "outputTokens") ? usage.outputTokens as number : 0,
-            },
-            model: effective,
-          };
+          const counters = usage !== null && typeof usage === "object" && !Array.isArray(usage)
+            ? { input_tokens: Object.hasOwn(usage, "inputTokens") ? usage.inputTokens : 0, output_tokens: Object.hasOwn(usage, "outputTokens") ? usage.outputTokens : 0 }
+            : usage === undefined ? { input_tokens: 0, output_tokens: 0 } : usage; // malformed: shared validation reports invalid_usage
+          return { answers: adaptVercelAnswers(result.answers, result.providerMetadata), usage: counters, model: effective };
         },
       };
     },

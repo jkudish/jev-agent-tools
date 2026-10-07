@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ask, openaiDecisionsModel, openrouterJevModel, resolveTransport } from "../dist/index.js";
+import { ask, cloudflareModel, DISCERN_ENV_NAMES, normalizeDiscernEnv, openaiDecisionsModel, openrouterJevModel, openrouterModel, resolveTransport } from "../dist/index.js";
 import { typesafe } from "../dist/transports/typesafe.js";
 import { openrouter } from "../dist/transports/openrouter.js";
 import { cloudflare } from "../dist/transports/cloudflare.js";
@@ -40,18 +40,18 @@ test("registry auto-detects in precedence order and explicit names select only t
     assert.equal(resolveTransport(env).name, expected);
   }
   for (const name of ["typesafe", "openrouter", "cloudflare", "vercel"]) {
-    assert.equal(resolveTransport({ ...all, JEV_PROVIDER: name.toUpperCase() }).name, name);
+    assert.equal(resolveTransport({ ...all, DISCERN_PROVIDER: name.toUpperCase() }).name, name);
   }
-  assert.equal(resolveTransport({ JEV_CLOUDFLARE_API_TOKEN: "pref", CLOUDFLARE_ACCOUNT_ID: "account" }).name, "cloudflare");
-  assert.throws(() => resolveTransport({ ...all, JEV_PROVIDER: "typo" }), /Unknown JEV_PROVIDER/);
-  assert.throws(() => resolveTransport({}), (error) => ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN", "JEV_CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "AI_GATEWAY_API_KEY"].every((name) => error.message.includes(name)));
+  assert.equal(resolveTransport({ DISCERN_CLOUDFLARE_API_TOKEN: "pref", CLOUDFLARE_ACCOUNT_ID: "account" }).name, "cloudflare");
+  assert.throws(() => resolveTransport({ ...all, DISCERN_PROVIDER: "typo" }), /Unknown DISCERN_PROVIDER/);
+  assert.throws(() => resolveTransport({}), (error) => ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN", "DISCERN_CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "AI_GATEWAY_API_KEY"].every((name) => error.message.includes(name)));
 });
 
 test("public ask returns configuration errors and redacts thrown transport details", async () => {
-  rejected(await ask(input, { env: { JEV_PROVIDER: "typo" } }), "configuration_error", /Unknown JEV_PROVIDER/);
+  rejected(await ask(input, { env: { DISCERN_PROVIDER: "typo" } }), "configuration_error", /Unknown DISCERN_PROVIDER/);
   const absent = await ask(input, { env: {} });
   rejected(absent, "configuration_error", /No TYPESAFE_API_KEY/);
-  for (const name of ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN", "JEV_CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "AI_GATEWAY_API_KEY"]) {
+  for (const name of ["TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN", "DISCERN_CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "AI_GATEWAY_API_KEY"]) {
     assert.ok(absent.message.includes(name));
   }
   rejected(await ask(input, { transport: { name: "body-secret", ask: async () => { throw Error("body-secret ts-secret"); } } }), "request_failed", /provider unknown: request failed/);
@@ -65,13 +65,13 @@ test("forced credentials reject every missing or invalid variant without leaking
     ["cloudflare", {}, /CLOUDFLARE_ACCOUNT_ID/],
     ["cloudflare", { CLOUDFLARE_API_TOKEN: "cf-secret" }, /CLOUDFLARE_ACCOUNT_ID/],
     ["cloudflare", { CLOUDFLARE_ACCOUNT_ID: "account-secret" }, /CLOUDFLARE_API_TOKEN/],
-    ["cloudflare", { JEV_CLOUDFLARE_API_TOKEN: "cf-secret" }, /CLOUDFLARE_ACCOUNT_ID/],
+    ["cloudflare", { DISCERN_CLOUDFLARE_API_TOKEN: "cf-secret" }, /CLOUDFLARE_ACCOUNT_ID/],
     ["vercel", {}, /AI_GATEWAY_API_KEY/],
   ];
   for (const [name, env, pattern] of cases) {
-    assert.throws(() => resolveTransport({ ...env, JEV_PROVIDER: name }), (error) => {
+    assert.throws(() => resolveTransport({ ...env, DISCERN_PROVIDER: name }), (error) => {
       assert.match(error.message, pattern);
-      assert.ok(error.message.startsWith(`JEV_PROVIDER=${name}`));
+      assert.ok(error.message.startsWith(`DISCERN_PROVIDER=${name}`));
       assert.ok(!error.message.includes("secret"));
       return true;
     });
@@ -222,8 +222,8 @@ test("OpenRouter maps latest and pinned slugs, sends exact envelope and redacts 
     for (const model of ["typesafe/jev-latest", "~typesafe/jev-latest", "jev-1.13"]) await askJev(transport, { ...input, model });
     assert.equal(calls[0].url, "https://openrouter.ai/api/alpha/decisions");
     assert.equal(calls[0].init.method, "POST");
-    assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sk-or-secret", "Content-Type": "application/json", "HTTP-Referer": "https://github.com/jkudish/jev-browser", "X-Title": "jev-browser", "X-OpenRouter-Title": "jev-browser" });
-    assert.equal(calls[0].init.signal, signal);
+    assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sk-or-secret", "Content-Type": "application/json", "HTTP-Referer": "https://github.com/jkudish/discern-agent-tools", "X-Title": "discern", "X-OpenRouter-Title": "discern" });
+    assert.ok(calls[0].init.signal instanceof AbortSignal && !calls[0].init.signal.aborted);
     assert.deepEqual(JSON.parse(calls[0].init.body), { model: "~typesafe/jev-latest", state: input.state, questions });
     assert.deepEqual(calls.map((call) => JSON.parse(call.init.body).model), ["~typesafe/jev-latest", "typesafe/jev-1.12", "~typesafe/jev-latest", "~typesafe/jev-latest", "typesafe/jev-1.13"]);
   });
@@ -247,7 +247,7 @@ test("OpenRouter maps latest and pinned slugs, sends exact envelope and redacts 
 
 test("Cloudflare token priority, double envelope, state, usage, and safe errors", async () => {
   const calls = [];
-  const env = { CLOUDFLARE_API_TOKEN: "low-secret", JEV_CLOUDFLARE_API_TOKEN: "high-secret", CLOUDFLARE_ACCOUNT_ID: "account" };
+  const env = { CLOUDFLARE_API_TOKEN: "low-secret", DISCERN_CLOUDFLARE_API_TOKEN: "high-secret", CLOUDFLARE_ACCOUNT_ID: "account" };
   await withFetch(async (url, init) => {
     calls.push({ url, init });
     return Response.json({ success: true, result: { state: "Completed", result: { answers, usage, model: "typesafe/jev" } } });
@@ -256,7 +256,7 @@ test("Cloudflare token priority, double envelope, state, usage, and safe errors"
     assert.deepEqual((await askJev(transport, input)).usage, usage);
     assert.equal(calls[0].url, "https://api.cloudflare.com/client/v4/accounts/account/ai/run");
     assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer high-secret", "Content-Type": "application/json" });
-    assert.equal(calls[0].init.signal, signal);
+    assert.ok(calls[0].init.signal instanceof AbortSignal && !calls[0].init.signal.aborted);
     assert.deepEqual(JSON.parse(calls[0].init.body), { model: "typesafe/jev", input: { state: input.state, questions } });
     assert.equal((await transport.ask({ ...input, model: "typesafe/jev-1.2" })).model, "typesafe/jev");
     assert.equal(JSON.parse(calls[1].init.body).model, "typesafe/jev-1.2");
@@ -279,7 +279,7 @@ test("Vercel factory forwards evaluate request and pure adaptation preserves con
   const reply = await askJev(factory.create({ AI_GATEWAY_API_KEY: "ai-secret" }), input);
   assert.equal(reply.model, "typesafe-ai/jev");
   assert.deepEqual(reply.usage, usage);
-  assert.equal(call.signal, signal);
+  assert.ok(call.signal instanceof AbortSignal && !call.signal.aborted);
   assert.equal(call.model, "typesafe-ai/jev");
   assert.deepEqual(call.questions, { item: { type: "choice", instructions: undefined, criteria: questions.item.criteria }, yes: { type: "boolean", instructions: undefined, criteria: undefined } });
   assert.deepEqual(reply.answer, { item: { ...answers.item, confidence: 0.92 }, yes: answers.yes });
@@ -290,11 +290,11 @@ test("Vercel factory forwards evaluate request and pure adaptation preserves con
   rejected(await askJev(malformed.create({ AI_GATEWAY_API_KEY: "ai-secret" }), input), "answer_id_mismatch", /provider vercel question yes.*missing answer/);
 });
 
-test("Vercel zero data retention is opt-in via JEV_VERCEL_ZERO_DATA_RETENTION", async () => {
+test("Vercel zero data retention is opt-in via DISCERN_VERCEL_ZERO_DATA_RETENTION", async () => {
   const result = { answers: { item: answers.item, yes: { type: "boolean", probability: 0.7 } }, usage: { inputTokens: 13, outputTokens: 3 } };
   for (const [value, expected] of [[undefined, false], ["", false], ["0", false], ["false", false], ["FaLsE", false], ["1", true], ["true", true], ["TRUE", true]]) {
     let call;
-    const env = { AI_GATEWAY_API_KEY: "ai-secret", ...(value === undefined ? {} : { JEV_VERCEL_ZERO_DATA_RETENTION: value }) };
+    const env = { AI_GATEWAY_API_KEY: "ai-secret", ...(value === undefined ? {} : { DISCERN_VERCEL_ZERO_DATA_RETENTION: value }) };
     await askJev(createVercelDriver(async (args) => { call = args; return result; }).create(env), input);
     assert.equal("providerOptions" in call, expected, `value ${JSON.stringify(value)}`);
     if (expected) assert.deepEqual(call.providerOptions, { gateway: { zeroDataRetention: true } });
@@ -302,30 +302,30 @@ test("Vercel zero data retention is opt-in via JEV_VERCEL_ZERO_DATA_RETENTION", 
   for (const value of ["yes", "tru", " true ", "2"]) {
     let calls = 0;
     assert.throws(
-      () => createVercelDriver(async () => { calls++; return result; }).create({ AI_GATEWAY_API_KEY: "ai-secret", JEV_VERCEL_ZERO_DATA_RETENTION: value }),
-      /^Error: JEV_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true\.$/,
+      () => createVercelDriver(async () => { calls++; return result; }).create({ AI_GATEWAY_API_KEY: "ai-secret", DISCERN_VERCEL_ZERO_DATA_RETENTION: value }),
+      /^Error: DISCERN_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true\.$/,
     );
     assert.equal(calls, 0);
     let fetches = 0;
     await withFetch(async () => { fetches++; return Response.json(result); }, async () => {
-      const rejectedResult = await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", JEV_PROVIDER: "vercel", JEV_VERCEL_ZERO_DATA_RETENTION: value } });
-      assert.deepEqual(rejectedResult, { ok: false, code: "configuration_error", message: "JEV_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true." });
+      const rejectedResult = await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", DISCERN_PROVIDER: "vercel", DISCERN_VERCEL_ZERO_DATA_RETENTION: value } });
+      assert.deepEqual(rejectedResult, { ok: false, code: "configuration_error", message: "DISCERN_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true." });
     });
     assert.equal(fetches, 0);
   }
   const repeated = [];
-  const transport = createVercelDriver(async (args) => { repeated.push(args.providerOptions); return result; }).create({ AI_GATEWAY_API_KEY: "ai-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "true" });
+  const transport = createVercelDriver(async (args) => { repeated.push(args.providerOptions); return result; }).create({ AI_GATEWAY_API_KEY: "ai-secret", DISCERN_VERCEL_ZERO_DATA_RETENTION: "true" });
   await askJev(transport, input);
   await askJev(transport, input);
   assert.deepEqual(repeated, [{ gateway: { zeroDataRetention: true } }, { gateway: { zeroDataRetention: true } }]);
   for (const env of [
-    { TYPESAFE_API_KEY: "ts-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "yes" },
-    { OPENROUTER_API_KEY: "sk-or-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "yes" },
-    { CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account", JEV_VERCEL_ZERO_DATA_RETENTION: "yes" },
+    { TYPESAFE_API_KEY: "ts-secret", DISCERN_VERCEL_ZERO_DATA_RETENTION: "yes" },
+    { OPENROUTER_API_KEY: "sk-or-secret", DISCERN_VERCEL_ZERO_DATA_RETENTION: "yes" },
+    { CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account", DISCERN_VERCEL_ZERO_DATA_RETENTION: "yes" },
   ]) assert.notEqual(resolveTransport(env).name, "vercel");
   const bodies = [];
   await withFetch(async (url, init) => { bodies.push(JSON.parse(init.body)); return Response.json(result); }, async () => {
-    await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "1" } });
+    await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", DISCERN_VERCEL_ZERO_DATA_RETENTION: "1" } });
     await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret" } });
   });
   assert.deepEqual(bodies[0].providerOptions, { gateway: { zeroDataRetention: true } });
@@ -335,7 +335,7 @@ test("Vercel zero data retention is opt-in via JEV_VERCEL_ZERO_DATA_RETENTION", 
     zdrFailures.push(JSON.parse(init.body));
     return Response.json({ error: "body-secret", type: "no_providers_available" }, { status: 400 });
   }, async () => {
-    rejected(await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", JEV_PROVIDER: "vercel", JEV_VERCEL_ZERO_DATA_RETENTION: "1" } }), "request_failed", /request failed/);
+    rejected(await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", DISCERN_PROVIDER: "vercel", DISCERN_VERCEL_ZERO_DATA_RETENTION: "1" } }), "request_failed", /request failed/);
   });
   assert.equal(zdrFailures.length, 1);
   assert.deepEqual(zdrFailures[0].providerOptions, { gateway: { zeroDataRetention: true } });
@@ -356,7 +356,7 @@ test("Vercel default fetch sends the evaluation protocol and never echoes HTTP b
   assert.equal(request.init.headers["ai-model-id"], "typesafe-ai/jev");
   assert.equal(request.init.headers["ai-evaluation-model-specification-version"], "4");
   assert.equal(request.init.headers.Authorization, "Bearer ai-secret");
-  assert.equal(request.init.signal, signal);
+  assert.ok(request.init.signal instanceof AbortSignal && !request.init.signal.aborted);
   assert.deepEqual(JSON.parse(request.init.body), { state: input.state, questions: { item: { type: "choice", criteria: questions.item.criteria }, yes: { type: "boolean" } } });
   await withFetch(async () => Response.json({ error: "body-secret" }, { status: 401 }), async () => {
     rejected(await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret" } }), "request_failed", /request failed/);
@@ -377,7 +377,8 @@ test("all adapters distinguish absent usage from malformed containers and presen
     if (name === "vercel") invalidCases.push({ usage: { [field]: undefined } }); // JSON drops undefined properties on the HTTP drivers.
     for (const invalid of invalidCases) {
       const result = await run(invalid);
-      rejected(result, invalid.usage === "body-secret" || invalid.usage === null ? "request_failed" : "invalid_usage", /usage|request failed/);
+      // A malformed usage block is a response-validity failure, never a transport failure.
+      rejected(result, "invalid_usage", /usage/);
     }
   }
 });
@@ -544,12 +545,12 @@ const openaiWire = {
   usage: { input_tokens: 128, input_tokens_details: { cached_tokens: 0 }, output_tokens: 0, total_tokens: 128 },
 };
 
-test("OpenAI is explicit-only and prefers JEV_OPENAI_API_KEY", () => {
+test("OpenAI is explicit-only and prefers DISCERN_OPENAI_API_KEY", () => {
   assert.throws(() => resolveTransport({ OPENAI_API_KEY: "sk-secret" }), /No TYPESAFE_API_KEY/);
   assert.equal(resolveTransport({ OPENAI_API_KEY: "sk-secret", AI_GATEWAY_API_KEY: "ai-secret" }).name, "vercel");
-  assert.equal(resolveTransport({ OPENAI_API_KEY: "sk-secret", JEV_PROVIDER: "OpenAI" }).name, "openai");
-  assert.equal(resolveTransport({ JEV_OPENAI_API_KEY: "sk-secret", JEV_PROVIDER: "openai" }).name, "openai");
-  assert.throws(() => resolveTransport({ JEV_PROVIDER: "openai", TYPESAFE_API_KEY: "ts-secret" }), (error) => error.message.startsWith("JEV_PROVIDER=openai") && /OPENAI_API_KEY/.test(error.message));
+  assert.equal(resolveTransport({ OPENAI_API_KEY: "sk-secret", DISCERN_PROVIDER: "OpenAI" }).name, "openai");
+  assert.equal(resolveTransport({ DISCERN_OPENAI_API_KEY: "sk-secret", DISCERN_PROVIDER: "openai" }).name, "openai");
+  assert.throws(() => resolveTransport({ DISCERN_PROVIDER: "openai", TYPESAFE_API_KEY: "ts-secret" }), (error) => error.message.startsWith("DISCERN_PROVIDER=openai") && /OPENAI_API_KEY/.test(error.message));
   assert.equal(openaiDecisionsModel("jev-latest"), "gpt-6-luna");
   assert.equal(openaiDecisionsModel("gpt-6-luna-2026-09-29"), "gpt-6-luna-2026-09-29");
 });
@@ -560,7 +561,7 @@ test("OpenAI translates Jev questions and answers through the shared validator",
     requests.push({ url, init });
     return Response.json(openaiWire);
   }, async () => {
-    const result = await ask(openaiInput, { env: { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret", JEV_OPENAI_API_KEY: "high-secret" } });
+    const result = await ask(openaiInput, { env: { DISCERN_PROVIDER: "openai", OPENAI_API_KEY: "low-secret", DISCERN_OPENAI_API_KEY: "high-secret" } });
     assert.equal(result.ok, true, result.message);
     assert.equal(result.provider, "openai");
     assert.equal(result.model, "gpt-6-luna");
@@ -592,16 +593,16 @@ test("OpenAI translates Jev questions and answers through the shared validator",
   }, async () => assert.equal((await ask({ ...openaiInput, questions: {
     i0: { type: "choice", instructions: { task: "Which class?", item: { id: "i0", text: "Charged twice" } }, criteria: { a: null, b: null } },
     bare: { type: "noul", instructions: null },
-  } }, { env: { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" } })).ok, true));
+  } }, { env: { DISCERN_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" } })).ok, true));
   // A string state is sent as-is, not JSON-quoted.
   await withFetch(async (_url, init) => {
     assert.equal(JSON.parse(init.body).input, "plain text");
     return Response.json(openaiWire);
-  }, async () => assert.equal((await ask({ ...openaiInput, state: "plain text" }, { env: { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" } })).ok, true));
+  }, async () => assert.equal((await ask({ ...openaiInput, state: "plain text" }, { env: { DISCERN_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" } })).ok, true));
 });
 
 test("OpenAI refusals, duplicate names, and typed choice values fail closed", async () => {
-  const env = { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" };
+  const env = { DISCERN_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" };
   const run = (answers) => withFetch(async () => Response.json({ ...openaiWire, answers }), () => ask(openaiInput, { env }));
   rejected(await run([openaiWire.answers[0], { type: "refusal", name: "route" }, openaiWire.answers[2]]), "refused", /question route: provider declined/);
   rejected(await run([...openaiWire.answers, openaiWire.answers[0]]), "malformed_answer", /answers must be an object/);
@@ -613,7 +614,7 @@ test("OpenAI refusals, duplicate names, and typed choice values fail closed", as
   }
   let sent = 0;
   await withFetch(async () => { sent++; return Response.json(openaiWire); }, async () => {
-    rejected(await ask({ ...openaiInput, questions: { odd: { type: "rank" } } }, { env }), "request_failed", /provider openai: request failed$/);
+    rejected(await ask({ ...openaiInput, questions: { odd: { type: "rank" } } }, { env }), "request_failed", /provider openai: request failed \(OpenAI Decisions API unsupported question \(request not sent\)\)$/);
   });
   assert.equal(sent, 0);
   await withFetch(async () => Response.json({ error: { message: "body-secret" } }, { status: 401 }), async () => {
@@ -625,7 +626,7 @@ test("OpenAI splits requests above 200 questions and merges answers and usage", 
   const many = Object.fromEntries(Array.from({ length: 250 }, (_, i) => [`rel_${i}`, { type: "noul", instructions: `Is ${i} relevant?` }]));
   const sizes = [];
   const reply = (body, usage) => Response.json({ model: "gpt-6-luna", usage, answers: body.questions.map((q) => ({ type: "choice", name: q.name, choice: true, probabilities: [{ value: true, probability: 0.5 }, { value: false, probability: 0.5 }] })) });
-  const env = { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" };
+  const env = { DISCERN_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" };
   await withFetch(async (_url, init) => {
     const body = JSON.parse(init.body);
     sizes.push(body.questions.length);
@@ -649,9 +650,232 @@ test("score accepts an integer level or the distribution mean, nothing else", as
   const reply = (value, probabilities = { "0": 0, "1": 0.34, "2": 0.66 }) => carrier({ answers: { rank: { type: "score", score: value, probabilities, confidence: 0.48 } } });
   // Live TypeSafe reply: mean 1.66 reported as 1.65 after rounding.
   assert.equal((await askJev(reply(1.65), score)).answer.rank.score, 1.65);
-  assert.equal((await askJev(reply(1), score)).ok, true);
-  rejected(await askJev(reply(0.5), score), "invalid_distribution", /does not match the distribution mean/);
-  rejected(await askJev(reply(1.6), score), "invalid_distribution", /does not match/);
+  // An integer must be the most likely level (2 here) or the mean, never just any level.
+  assert.equal((await askJev(reply(2), score)).answer.rank.score, 2);
+  rejected(await askJev(reply(1), score), "invalid_distribution", /neither the distribution mean nor its most likely level/);
+  rejected(await askJev(reply(0), score), "invalid_distribution", /neither/);
+  rejected(await askJev(reply(0.5), score), "invalid_distribution", /neither the distribution mean/);
+  rejected(await askJev(reply(1.6), score), "invalid_distribution", /neither/);
   rejected(await askJev(reply(2.01), score), "invalid_choice", /outside criteria levels/);
   rejected(await askJev(reply(-0.01), score), "invalid_choice", /outside criteria levels/);
+});
+
+test("legacy JEV_ variables alias DISCERN_ ones through 1.x, and conflicts fail without values", async () => {
+  // Alone, a legacy name is copied and reported; the new name wins when both agree.
+  assert.deepEqual(normalizeDiscernEnv({ JEV_PROVIDER: "vercel", OTHER: "x" }), { env: { JEV_PROVIDER: "vercel", DISCERN_PROVIDER: "vercel", OTHER: "x" }, legacy: ["JEV_PROVIDER"] });
+  assert.deepEqual(normalizeDiscernEnv({ JEV_PROVIDER: "vercel", DISCERN_PROVIDER: "vercel" }).legacy, ["JEV_PROVIDER"]);
+  // Empty strings count as unset on either side (MCP clients pass "" for unconfigured variables).
+  assert.equal(normalizeDiscernEnv({ JEV_PROVIDER: "vercel", DISCERN_PROVIDER: "" }).env.DISCERN_PROVIDER, "vercel");
+  assert.deepEqual(normalizeDiscernEnv({ JEV_PROVIDER: "", DISCERN_PROVIDER: "typesafe" }), { env: { JEV_PROVIDER: "", DISCERN_PROVIDER: "typesafe" }, legacy: [] });
+  assert.deepEqual(normalizeDiscernEnv({ JEV_: "x" }).legacy, []);
+  assert.throws(() => normalizeDiscernEnv({ JEV_OPENAI_API_KEY: "high-secret", DISCERN_OPENAI_API_KEY: "low-secret" }), (error) => {
+    assert.equal(error.message, "DISCERN_OPENAI_API_KEY and JEV_OPENAI_API_KEY are both set to different values; unset JEV_OPENAI_API_KEY.");
+    return true;
+  });
+
+  // Every legacy driver setting still reaches its driver through the registry.
+  assert.equal(resolveTransport({ JEV_PROVIDER: "openai", JEV_OPENAI_API_KEY: "sk-secret" }).name, "openai");
+  assert.equal(resolveTransport({ JEV_CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account" }).name, "cloudflare");
+  let sent;
+  await withFetch(async (url, init) => { sent = { url, init }; return Response.json(openaiWire); }, async () => {
+    const result = await ask(openaiInput, { env: { JEV_PROVIDER: "openai", JEV_OPENAI_API_KEY: "high-secret", OPENAI_API_KEY: "low-secret", JEV_OPENAI_BASE_URL: "https://proxy.test/v1" } });
+    assert.equal(result.ok, true, result.message);
+  });
+  assert.equal(sent.url, "https://proxy.test/v1/decisions");
+  assert.equal(sent.init.headers.Authorization, "Bearer high-secret");
+  const zdr = [];
+  await withFetch(async (_url, init) => { zdr.push(JSON.parse(init.body).providerOptions); return Response.json({ answers: { item: answers.item, yes: { type: "boolean", probability: 0.7 } }, usage: { inputTokens: 1, outputTokens: 0 } }); },
+    async () => assert.equal((await ask(input, { env: { AI_GATEWAY_API_KEY: "ai-secret", JEV_VERCEL_ZERO_DATA_RETENTION: "1" } })).ok, true));
+  assert.deepEqual(zdr, [{ gateway: { zeroDataRetention: true } }]);
+
+  // Through ask(), a conflict is a configuration error that names variables and leaks no values.
+  rejected(await ask(input, { env: { DISCERN_PROVIDER: "typesafe", JEV_PROVIDER: "openai", TYPESAFE_API_KEY: "ts-secret" } }), "configuration_error", /^DISCERN_PROVIDER and JEV_PROVIDER are both set to different values; unset JEV_PROVIDER\.$/);
+  rejected(await ask(input, { env: { JEV_PROVIDER: "typo" } }), "configuration_error", /Unknown DISCERN_PROVIDER/);
+  // An empty DISCERN_PROVIDER means auto, not an unknown provider.
+  assert.equal(resolveTransport({ DISCERN_PROVIDER: "", TYPESAFE_API_KEY: "ts-secret" }).name, "typesafe");
+});
+
+test("Cloudflare serves Clef on the same endpoint with a single-nested envelope", async () => {
+  assert.equal(cloudflareModel("clef"), "@cf/cloudflare/clef");
+  assert.equal(cloudflareModel("clef-flash"), "@cf/cloudflare/clef-flash");
+  assert.equal(cloudflareModel("@cf/cloudflare/clef-2"), "@cf/cloudflare/clef-2");
+  assert.equal(cloudflareModel("jev-latest"), "typesafe/jev");
+  assert.equal(cloudflareModel("jev-1.13"), "typesafe/jev-1.13");
+  assert.equal(cloudflareModel("clefx"), "typesafe/clefx");
+  const env = { CLOUDFLARE_API_TOKEN: "low-secret", CLOUDFLARE_ACCOUNT_ID: "account" };
+  // Live Clef reply shape (2026-10-07): answers directly under result, fractional score, legend, 4-decimal probabilities.
+  const scoreQ = { ...input, model: "clef-flash", questions: { ...questions, sev: { type: "score", criteria: ["None", "Minor", "Major", "Critical"] } } };
+  const clefAnswers = { ...answers, sev: { type: "score", score: 2.72, legend: { 0: "None", 1: "Minor", 2: "Major", 3: "Critical" }, probabilities: { 0: 0.015, 1: 0.0143, 2: 0.2064, 3: 0.7643 }, confidence: 0.5029 } };
+  let body;
+  await withFetch(async (_url, init) => { body = JSON.parse(init.body); return Response.json({ success: true, result: { model: "clef-flash", answers: clefAnswers, usage: { input_tokens: 346, output_tokens: 0 } } }); }, async () => {
+    const result = await ask(scoreQ, { env: { ...env, DISCERN_PROVIDER: "cloudflare" } });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(result.model, "clef-flash");
+    assert.equal(result.answer.sev.score, 2.72);
+    assert.deepEqual(result.usage, { input_tokens: 346, output_tokens: 0 });
+  });
+  assert.equal(body.model, "@cf/cloudflare/clef-flash");
+  assert.deepEqual(body.input.questions.sev.criteria, ["None", "Minor", "Major", "Critical"]);
+});
+
+test("review fixes: noul consistency, refusal order, sibling cancellation, openrouterModel alias", async () => {
+  const env = { DISCERN_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" };
+  const run = (done) => withFetch(async () => Response.json({ ...openaiWire, answers: [done, openaiWire.answers[1], openaiWire.answers[2]] }), () => ask(openaiInput, { env }));
+  const noul = (yes, no, choice) => ({ type: "choice", name: "done", choice, probabilities: [{ value: true, probability: yes }, { value: false, probability: no }] });
+  assert.equal((await run(noul(0.3, 0.7, false))).answer.done.noul, 0.3);
+  rejected(await run(noul(0.9, 0.9, false)), "invalid_noul", /question done/); // does not sum to 1
+  rejected(await run(noul(0.9, 0.1, false)), "invalid_noul", /question done/); // choice contradicts the weights
+  rejected(await run(noul(0.9, 0.1, "true")), "invalid_noul", /question done/); // choice is not a boolean
+
+  // A refusal cannot mask a malformed question.
+  rejected(await askJev(carrier({ answers: { q: { type: "refusal" } } }), { ...input, questions: { q: "garbage" } }), "malformed_answer", /question q/);
+  rejected(await askJev(carrier({ answers: { ...answers, item: { type: "refusal" } } }), input), "refused", /question item/);
+
+  // When one chunk fails, the sibling chunk is aborted instead of retrying after ask() returns.
+  const many = Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`q${i}`, { type: "noul" }]));
+  let calls = 0;
+  let siblingAborted = false;
+  await withFetch(async (_url, init) => {
+    calls++;
+    if (JSON.parse(init.body).questions.length === 200) return new Response("{}", { status: 400 });
+    return new Promise((resolve, reject) => init.signal.addEventListener("abort", () => { siblingAborted = true; reject(init.signal.reason); }));
+  }, async () => rejected(await ask({ ...openaiInput, questions: many }, { env }), "request_failed", /HTTP 400/));
+  assert.equal(siblingAborted, true);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(calls, 2);
+  // A caller abort still surfaces as cancellation.
+  const controller = new AbortController();
+  controller.abort(new Error("caller-cancel"));
+  await withFetch(async (_url, init) => { throw init.signal.reason; }, async () => {
+    const result = await ask({ ...openaiInput, signal: controller.signal }, { env });
+    assert.equal(result.ok, false);
+  });
+
+  assert.equal(openrouterModel("jev-latest"), "~typesafe/jev-latest");
+  assert.equal(openrouterJevModel, openrouterModel);
+});
+
+test("transport consolidation: compatible carrier, base URLs, latest alias, error detail, deadline, size cap, attempts", async () => {
+  // The compatible carrier: explicit, or auto only when nothing else is configured.
+  const compat = { DISCERN_API_KEY: "c-secret", DISCERN_API_BASE_URL: "https://compat.test/v1/systemone" };
+  assert.equal(resolveTransport(compat).name, "compatible");
+  assert.equal(resolveTransport({ ...compat, TYPESAFE_API_KEY: "ts-secret" }).name, "typesafe");
+  assert.throws(() => resolveTransport({ DISCERN_PROVIDER: "compatible", DISCERN_API_KEY: "c" }), /^Error: DISCERN_PROVIDER=compatible but DISCERN_API_BASE_URL is not set\.$/);
+  let request;
+  await withFetch(async (url, init) => { request = { url, body: JSON.parse(init.body), auth: init.headers.Authorization }; return Response.json({ answers, usage: null }); }, async () => {
+    const result = await ask({ ...input, model: "latest" }, { env: { ...compat, JEV_API_KEY: "c-secret" } });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(result.provider, "compatible");
+    assert.equal(result.model, "jev-latest");
+    assert.deepEqual(result.usage, { input_tokens: 0, output_tokens: 0 });
+  });
+  assert.equal(request.url, "https://compat.test/v1/systemone");
+  assert.equal(request.auth, "Bearer c-secret");
+  assert.equal(request.body.model, "jev-latest");
+
+  // The neutral `latest` alias maps per carrier.
+  const sent = [];
+  const record = async (url, init) => { const body = JSON.parse(init.body); sent.push([new URL(url).host, body.model]); return Response.json(url.includes("decisions") && !url.includes("openrouter") ? openaiWire : url.includes("cloudflare") ? { success: true, result: { answers, usage } } : { answers, usage }); };
+  await withFetch(record, async () => {
+    for (const env of [{ TYPESAFE_API_KEY: "t" }, { OPENROUTER_API_KEY: "sk-or-x" }, { CLOUDFLARE_API_TOKEN: "c", CLOUDFLARE_ACCOUNT_ID: "a" }]) {
+      assert.equal((await ask({ ...input, model: "latest" }, { env })).ok, true);
+    }
+    assert.equal((await ask({ ...openaiInput, model: "latest" }, { env: { DISCERN_PROVIDER: "openai", OPENAI_API_KEY: "o" } })).ok, true);
+  });
+  assert.deepEqual(sent, [["api.typesafe.ai", "jev-latest"], ["openrouter.ai", "~typesafe/jev-latest"], ["api.cloudflare.com", "typesafe/jev"], ["api.openai.com", "gpt-6-luna"]]);
+
+  // Base URL overrides tolerate a trailing slash.
+  const urls = [];
+  await withFetch(async (url) => { urls.push(url); return url.includes("cloudflare") ? Response.json({ success: true, result: { answers, usage } }) : Response.json({ answers, usage }); }, async () => {
+    await ask(input, { env: { OPENROUTER_API_KEY: "sk-or-x", DISCERN_OPENROUTER_BASE_URL: "http://127.0.0.1:9/or/" } });
+    await ask(input, { env: { CLOUDFLARE_API_TOKEN: "c", CLOUDFLARE_ACCOUNT_ID: "acct", JEV_CLOUDFLARE_BASE_URL: "http://127.0.0.1:9/cf/" } });
+  });
+  assert.deepEqual(urls, ["http://127.0.0.1:9/or/alpha/decisions", "http://127.0.0.1:9/cf/accounts/acct/ai/run"]);
+
+  // OpenRouter's allow-listed token-limit code reaches the message; other upstream text never does.
+  const wrapped = (type) => Response.json({ error: { code: 400, message: `HTTP 400: {"detail":{"error_type":"${type}","note":"body-secret"}}` } }, { status: 400 });
+  await withFetch(async () => wrapped("max_tokens_exceeded"), async () => {
+    rejected(await ask(input, { env: { OPENROUTER_API_KEY: "sk-or-x" } }), "request_failed", /^Discern provider openrouter: request failed \(HTTP 400, max_tokens_exceeded\)$/);
+  });
+  await withFetch(async () => wrapped("body-secret"), async () => {
+    rejected(await ask(input, { env: { OPENROUTER_API_KEY: "sk-or-x" } }), "request_failed", /^Discern provider openrouter: request failed \(HTTP 400\)$/);
+  });
+  // An injected transport cannot smuggle text in through `detail`.
+  rejected(await ask(input, { transport: { name: "fixture", ask: async () => { throw Object.assign(new Error("x"), { status: 400, detail: "body_secret" }); } } }), "request_failed", /\(HTTP 400\)$/);
+
+  // The deadline covers every attempt and is reported as timeout; a caller abort is not.
+  await withFetch(async (_url, init) => new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason))), async () => {
+    rejected(await ask(input, { env: { TYPESAFE_API_KEY: "t" }, timeoutMs: 30 }), "timeout", /no answer within the 30ms deadline/);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("caller")), 10);
+    rejected(await ask({ ...input, signal: controller.signal }, { env: { TYPESAFE_API_KEY: "t" }, timeoutMs: 5_000 }), "request_failed", /request failed$/);
+  });
+
+  // Response bodies are capped while streaming, and maxAttempts bounds retries.
+  await withFetch(async () => new Response("x".repeat(1_000_001), { status: 200 }), async () => {
+    rejected(await ask(input, { env: { TYPESAFE_API_KEY: "t" } }), "request_failed", /response exceeded 1000000 bytes/);
+  });
+  let attempts = 0;
+  await withFetch(async () => { attempts++; return new Response("{}", { status: 503, headers: { "retry-after": "0" } }); }, async () => {
+    rejected(await ask(input, { env: { OPENROUTER_API_KEY: "sk-or-x" }, maxAttempts: 5 }), "unavailable", /HTTP 503/);
+  });
+  assert.equal(attempts, 5);
+});
+
+test("only listed JEV_ variables alias DISCERN_ ones; consumers extend the list", () => {
+  // Unrelated JEV_ variables are ignored, so they can neither be copied nor conflict.
+  assert.deepEqual(normalizeDiscernEnv({ JEV_HOME: "/a", DISCERN_HOME: "/b" }), { env: { JEV_HOME: "/a", DISCERN_HOME: "/b" }, legacy: [] });
+  assert.ok(DISCERN_ENV_NAMES.includes("PROVIDER") && Object.isFrozen(DISCERN_ENV_NAMES));
+  // Consumers add exact names and prefix families (a suffix ending in "_").
+  const names = [...DISCERN_ENV_NAMES, "MCP_MODEL", "PASSWORD_"];
+  const { env, legacy } = normalizeDiscernEnv({ JEV_MCP_MODEL: "clef", JEV_PASSWORD_ACME: "pw-secret", JEV_PASSWORD_: "bare", JEV_MCP_MODELX: "no" }, names);
+  assert.equal(env.DISCERN_MCP_MODEL, "clef");
+  assert.equal(env.DISCERN_PASSWORD_ACME, "pw-secret");
+  assert.equal(env.DISCERN_PASSWORD_, undefined);
+  assert.equal(env.DISCERN_MCP_MODELX, undefined);
+  assert.deepEqual(legacy, ["JEV_MCP_MODEL", "JEV_PASSWORD_ACME"]);
+});
+
+test("onReply sees the raw reply of a built-in carrier without losing its diagnostics", async () => {
+  let seen;
+  await withFetch(async () => Response.json({ answers: { ...answers, extra: { type: "noul", noul: 2 } }, usage, model: "jev-1.13.0" }), async () => {
+    const result = await ask(input, { env: { TYPESAFE_API_KEY: "t" }, onReply: (reply) => { seen = reply; throw new Error("observer-secret"); } });
+    rejected(result, "answer_id_mismatch", /unexpected answer ID/);
+  });
+  assert.equal(seen.model, "jev-1.13.0");
+  assert.equal(seen.answers.extra.noul, 2);
+  // Using onReply instead of wrapping the transport keeps built-in error detail.
+  await withFetch(async () => Response.json({ error: { message: 'HTTP 400: {"detail":{"error_type":"max_tokens_exceeded"}}' } }, { status: 400 }), async () => {
+    rejected(await ask(input, { env: { OPENROUTER_API_KEY: "sk-or-x" }, onReply: () => {} }), "request_failed", /HTTP 400, max_tokens_exceeded/);
+  });
+});
+
+test("oracle fixes: no leaked listeners or timers, clamped timeout, optional signal, built-in-only detail", async () => {
+  // A long-lived caller signal gains no lasting listener, even with a transport that ignores its signal.
+  const caller = new AbortController();
+  const added = [];
+  const removed = [];
+  const add = caller.signal.addEventListener.bind(caller.signal);
+  const remove = caller.signal.removeEventListener.bind(caller.signal);
+  caller.signal.addEventListener = (type, fn, opts) => { added.push(fn); add(type, fn, opts); };
+  caller.signal.removeEventListener = (type, fn, opts) => { removed.push(fn); remove(type, fn, opts); };
+  for (let i = 0; i < 5; i++) assert.equal((await askJev(carrier(), { ...input, signal: caller.signal })).ok, true);
+  assert.equal(added.length, 5);
+  assert.deepEqual(removed, added);
+
+  // An out-of-range timeout is clamped instead of throwing or firing at once.
+  assert.equal((await ask(input, { transport: carrier(), timeoutMs: 99_999_999_999 })).ok, true);
+  // A JavaScript caller that omits the signal still gets a result.
+  assert.equal((await ask({ ...input, signal: undefined }, { transport: carrier() })).ok, true);
+
+  // Built-in errors keep their fixed reason; an injected transport's message never appears, even if it mimics one.
+  await withFetch(async () => new Response("not json", { status: 200 }), async () => {
+    rejected(await ask(input, { env: { TYPESAFE_API_KEY: "t" } }), "request_failed", /request failed \(TypeSafe API returned an unparseable response\)$/);
+  });
+  rejected(await ask(input, { transport: { name: "fixture", ask: async () => { throw new Error("TypeSafe API body-secret"); } } }), "request_failed", /request failed$/);
+  // An injected transport wrapping a built-in one (as discern-browser does) keeps the built-in detail.
+  const wrappedOpenRouter = (inner) => ({ name: inner.name, ask: (request) => inner.ask(request) });
+  await withFetch(async () => Response.json({ error: { message: 'HTTP 400: {"detail":{"error_type":"max_tokens_exceeded"}}' } }, { status: 400 }), async () => {
+    rejected(await ask(input, { transport: wrappedOpenRouter(resolveTransport({ OPENROUTER_API_KEY: "sk-or-x" })) }), "request_failed", /HTTP 400, max_tokens_exceeded/);
+  });
 });

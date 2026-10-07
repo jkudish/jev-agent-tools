@@ -1,9 +1,9 @@
 import type { BuiltinDriver } from "../provider.js";
-import { postJsonWithRetry } from "./http.js";
+import { CarrierFailure, postJson } from "./http.js";
 
 // OpenAI Decisions API (public beta): https://developers.openai.com/api/docs/guides/decisions
 // It is not Jev: a different model (gpt-6-luna) with its own calibration, so
-// thresholds tuned on Jev do not transfer. Explicit-only (JEV_PROVIDER=openai)
+// thresholds tuned on Jev do not transfer. Explicit-only (DISCERN_PROVIDER=openai)
 // because OPENAI_API_KEY is common in environments that never chose it.
 
 const LABEL = "OpenAI Decisions API";
@@ -13,7 +13,7 @@ const MAX_QUESTIONS_PER_REQUEST = 200;
 
 /**
  * Jev questions refer to "the state", so name it, and pretty-print it. Measured
- * on captured jev-mcp and jev-browser requests, this removed a choice refusal
+ * on captured discern-mcp and discern-browser requests, this removed a choice refusal
  * and raised agreement with TypeSafe over compact unlabeled JSON. String state
  * is sent unchanged.
  */
@@ -21,9 +21,9 @@ export function toDecisionInput(state: unknown): string {
   return typeof state === "string" ? state : `State (JSON):\n${JSON.stringify(state ?? null, null, 2)}`;
 }
 
-/** Map a Jev model name to an OpenAI Decisions model. Only the moving alias maps; anything else passes through. */
+/** Map a model name to an OpenAI Decisions model. The `latest` and `jev-latest` aliases map to the current model; anything else passes through. */
 export function openaiDecisionsModel(model: string): string {
-  return model === "jev-latest" ? OPENAI_DECISIONS_MODEL : model;
+  return model === "latest" || model === "jev-latest" ? OPENAI_DECISIONS_MODEL : model;
 }
 
 type DecisionQuestion =
@@ -58,7 +58,7 @@ export function toDecisionQuestion(name: string, question: unknown): DecisionQue
   if (q.type === "score" && Array.isArray(q.criteria)) {
     return { type: "score", name, instructions, levels: q.criteria.map((description, index) => described(description) ? { label: String(index), description } : { label: String(index) }) };
   }
-  throw new Error(`${LABEL} unsupported question (request not sent)`);
+  throw new CarrierFailure(`${LABEL} unsupported question (request not sent)`);
 }
 
 /** Probabilities arrive as [{value, probability}]; Jev keys them by criterion. Malformed or duplicate entries fail closed as null. */
@@ -74,10 +74,20 @@ function keyedProbabilities(entries: unknown, valid: (value: unknown) => boolean
   return Object.fromEntries(keyed);
 }
 
-/** The weight on true from a boolean choice; null (rejected as invalid_noul) unless the distribution is exactly {true, false}. */
-function trueWeight(entries: unknown): number | null {
-  const keyed = keyedProbabilities(entries, (value) => typeof value === "boolean");
-  return keyed && Object.keys(keyed).length === 2 && typeof keyed.true === "number" ? keyed.true : null;
+/**
+ * The weight on true from a boolean choice, or null (rejected as invalid_noul).
+ * The distribution must be exactly {true, false}, both finite in [0,1] and
+ * summing to 1 within two-decimal rounding, and the reported choice must be its
+ * maximum (0.001 tie), so a contradictory answer can never become a noul.
+ */
+function trueWeight(answer: Record<string, unknown>): number | null {
+  const keyed = keyedProbabilities(answer.probabilities, (value) => typeof value === "boolean");
+  if (!keyed || Object.keys(keyed).length !== 2) return null;
+  const [yes, no] = [keyed.true, keyed.false];
+  const unit = (p: unknown): p is number => typeof p === "number" && Number.isFinite(p) && p >= 0 && p <= 1;
+  if (!unit(yes) || !unit(no) || Math.abs(yes + no - 1) > 0.01 + 1e-9) return null;
+  if (typeof answer.choice !== "boolean" || (answer.choice ? yes : no) + 0.001 < Math.max(yes, no)) return null;
+  return yes;
 }
 
 /**
@@ -94,7 +104,7 @@ export function adaptOpenAIAnswers(answers: unknown, nouls: ReadonlySet<string> 
     if (!record(answer) || typeof answer.name !== "string" || seen.has(answer.name)) return answers;
     seen.add(answer.name);
     const confidence = answer.confidence === undefined ? null : answer.confidence;
-    if (nouls.has(answer.name) && answer.type === "choice") adapted.push([answer.name, { type: "noul", noul: trueWeight(answer.probabilities) }]);
+    if (nouls.has(answer.name) && answer.type === "choice") adapted.push([answer.name, { type: "noul", noul: trueWeight(answer) }]);
     else if (answer.type === "predicate") adapted.push([answer.name, { type: "noul", noul: answer.probability }]);
     else if (answer.type === "choice") adapted.push([answer.name, { type: "choice", choice: answer.choice, probabilities: keyedProbabilities(answer.probabilities, (value) => typeof value === "string"), confidence }]);
     else if (answer.type === "score") adapted.push([answer.name, { type: "score", score: answer.score, probabilities: keyedProbabilities(answer.probabilities, Number.isSafeInteger), confidence }]);
@@ -107,33 +117,47 @@ export function adaptOpenAIAnswers(answers: unknown, nouls: ReadonlySet<string> 
 export const openai: BuiltinDriver = {
   name: "openai",
   explicitOnly: true,
-  isConfigured: (env) => Boolean(env.JEV_OPENAI_API_KEY || env.OPENAI_API_KEY),
+  isConfigured: (env) => Boolean(env.DISCERN_OPENAI_API_KEY || env.OPENAI_API_KEY),
   assertConfigured(env) {
-    if (!this.isConfigured(env)) throw new Error("JEV_OPENAI_API_KEY or OPENAI_API_KEY is not set.");
+    if (!this.isConfigured(env)) throw new CarrierFailure("DISCERN_OPENAI_API_KEY or OPENAI_API_KEY is not set.");
   },
-  create(env) {
+  create(env, options = {}) {
     this.assertConfigured(env);
-    const key = (env.JEV_OPENAI_API_KEY || env.OPENAI_API_KEY)!;
+    const key = (env.DISCERN_OPENAI_API_KEY || env.OPENAI_API_KEY)!;
     // Deliberately not OPENAI_BASE_URL: proxies configured for chat rarely serve /decisions.
-    const url = `${(env.JEV_OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "")}/decisions`;
+    const url = `${(env.DISCERN_OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "")}/decisions`;
     return {
       name: this.name,
       async ask({ state, questions, model, signal }) {
         const effectiveRequest = openaiDecisionsModel(model);
         const input = toDecisionInput(state);
         const translated = Object.entries(questions).map(([name, question]) => toDecisionQuestion(name, question));
-        if (!translated.length) throw new Error(`${LABEL} has no questions (request not sent)`);
+        if (!translated.length) throw new CarrierFailure(`${LABEL} has no questions (request not sent)`);
         const nouls = new Set(Object.entries(questions).filter(([, question]) => record(question) && question.type === "noul").map(([name]) => name));
         const chunks: DecisionQuestion[][] = [];
         for (let i = 0; i < translated.length; i += MAX_QUESTIONS_PER_REQUEST) chunks.push(translated.slice(i, i + MAX_QUESTIONS_PER_REQUEST));
-        // Chunks share the input and run concurrently; any failure fails the call.
-        const replies = await Promise.all(chunks.map((chunk) => postJsonWithRetry(
-          url,
-          { Authorization: `Bearer ${key}`, Accept: "application/json", "Content-Type": "application/json" },
-          JSON.stringify({ model: effectiveRequest, input, questions: chunk }),
-          signal,
-          LABEL,
-        )));
+        // Chunks share the input and run concurrently; any failure fails the
+        // call and cancels its siblings, so no request or retry outlives ask().
+        const siblings = new AbortController();
+        const cancel = () => siblings.abort(signal.reason);
+        if (signal.aborted) cancel();
+        else signal.addEventListener("abort", cancel, { once: true });
+        let replies: unknown[];
+        try {
+          replies = await Promise.all(chunks.map((chunk) => postJson(
+            url,
+            { Authorization: `Bearer ${key}`, Accept: "application/json", "Content-Type": "application/json" },
+            JSON.stringify({ model: effectiveRequest, input, questions: chunk }),
+            { label: LABEL, signal: siblings.signal, maxAttempts: options.maxAttempts },
+          )));
+        } catch (error) {
+          siblings.abort();
+          // A caller's abort keeps its own reason; sibling cancellation is internal.
+          if (signal.aborted) throw signal.reason;
+          throw error;
+        } finally {
+          signal.removeEventListener("abort", cancel);
+        }
         let answers: unknown[] | null = [];
         let inputTokens = 0;
         let outputTokens = 0;
@@ -145,11 +169,15 @@ export const openai: BuiltinDriver = {
           return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : NaN;
         };
         for (const reply of replies) {
-          if (!record(reply)) throw new Error(`${LABEL} invalid envelope (response omitted)`);
+          if (!record(reply)) throw new CarrierFailure(`${LABEL} invalid envelope (response omitted)`);
           const usage = reply.usage;
-          if (usage !== undefined && !record(usage)) throw new Error(`${LABEL} invalid usage (response omitted)`);
-          inputTokens += counter(usage, "input_tokens");
-          outputTokens += counter(usage, "output_tokens");
+          // A malformed usage container poisons the sums like a malformed counter.
+          if (usage !== undefined && !record(usage)) {
+            inputTokens = NaN;
+            outputTokens = NaN;
+          }
+          inputTokens += counter(record(usage) ? usage : undefined, "input_tokens");
+          outputTokens += counter(record(usage) ? usage : undefined, "output_tokens");
           // A non-array answers field is malformed; null fails validation closed.
           if (answers && Array.isArray(reply.answers)) answers.push(...reply.answers);
           else answers = null;
