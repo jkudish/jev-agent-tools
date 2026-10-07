@@ -1,5 +1,5 @@
 import type { BuiltinDriver } from "../provider.js";
-import { postJsonWithRetry } from "./http.js";
+import { postJson } from "./http.js";
 
 // OpenAI Decisions API (public beta): https://developers.openai.com/api/docs/guides/decisions
 // It is not Jev: a different model (gpt-6-luna) with its own calibration, so
@@ -21,9 +21,9 @@ export function toDecisionInput(state: unknown): string {
   return typeof state === "string" ? state : `State (JSON):\n${JSON.stringify(state ?? null, null, 2)}`;
 }
 
-/** Map a Jev model name to an OpenAI Decisions model. Only the moving alias maps; anything else passes through. */
+/** Map a model name to an OpenAI Decisions model. The `latest` and `jev-latest` aliases map to the current model; anything else passes through. */
 export function openaiDecisionsModel(model: string): string {
-  return model === "jev-latest" ? OPENAI_DECISIONS_MODEL : model;
+  return model === "latest" || model === "jev-latest" ? OPENAI_DECISIONS_MODEL : model;
 }
 
 type DecisionQuestion =
@@ -121,7 +121,7 @@ export const openai: BuiltinDriver = {
   assertConfigured(env) {
     if (!this.isConfigured(env)) throw new Error("DISCERN_OPENAI_API_KEY or OPENAI_API_KEY is not set.");
   },
-  create(env) {
+  create(env, options = {}) {
     this.assertConfigured(env);
     const key = (env.DISCERN_OPENAI_API_KEY || env.OPENAI_API_KEY)!;
     // Deliberately not OPENAI_BASE_URL: proxies configured for chat rarely serve /decisions.
@@ -144,12 +144,11 @@ export const openai: BuiltinDriver = {
         else signal.addEventListener("abort", cancel, { once: true });
         let replies: unknown[];
         try {
-          replies = await Promise.all(chunks.map((chunk) => postJsonWithRetry(
+          replies = await Promise.all(chunks.map((chunk) => postJson(
             url,
             { Authorization: `Bearer ${key}`, Accept: "application/json", "Content-Type": "application/json" },
             JSON.stringify({ model: effectiveRequest, input, questions: chunk }),
-            siblings.signal,
-            LABEL,
+            { label: LABEL, signal: siblings.signal, maxAttempts: options.maxAttempts },
           )));
         } catch (error) {
           siblings.abort();
@@ -172,9 +171,13 @@ export const openai: BuiltinDriver = {
         for (const reply of replies) {
           if (!record(reply)) throw new Error(`${LABEL} invalid envelope (response omitted)`);
           const usage = reply.usage;
-          if (usage !== undefined && !record(usage)) throw new Error(`${LABEL} invalid usage (response omitted)`);
-          inputTokens += counter(usage, "input_tokens");
-          outputTokens += counter(usage, "output_tokens");
+          // A malformed usage container poisons the sums like a malformed counter.
+          if (usage !== undefined && !record(usage)) {
+            inputTokens = NaN;
+            outputTokens = NaN;
+          }
+          inputTokens += counter(record(usage) ? usage : undefined, "input_tokens");
+          outputTokens += counter(record(usage) ? usage : undefined, "output_tokens");
           // A non-array answers field is malformed; null fails validation closed.
           if (answers && Array.isArray(reply.answers)) answers.push(...reply.answers);
           else answers = null;

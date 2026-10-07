@@ -3,6 +3,7 @@ import { openrouter } from "./transports/openrouter.js";
 import { cloudflare } from "./transports/cloudflare.js";
 import { vercel } from "./transports/vercel.js";
 import { openai } from "./transports/openai.js";
+import { compatible } from "./transports/compatible.js";
 import { normalizeDiscernEnv } from "./env.js";
 
 export interface DiscernTransportInput {
@@ -23,13 +24,18 @@ export interface DiscernTransport {
   ask(input: DiscernTransportInput): Promise<DiscernTransportReply>;
 }
 
+export interface TransportOptions {
+  /** Total HTTP attempts per request, including the first; clamped to 1..6. Default 3. */
+  maxAttempts?: number;
+}
+
 export interface BuiltinDriver {
-  readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel" | "openai";
+  readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel" | "openai" | "compatible";
   /** Never auto-detected; selected only by DISCERN_PROVIDER. */
   readonly explicitOnly?: true;
   isConfigured(env: Env): boolean;
   assertConfigured(env: Env): void;
-  create(env: Env): DiscernTransport;
+  create(env: Env, options?: TransportOptions): DiscernTransport;
 }
 
 export type Env = Record<string, string | undefined>;
@@ -52,39 +58,50 @@ export type DiscernAnswer =
 /** @deprecated Use DiscernAnswer. Removed in 2.0. */
 export type JevAnswer = DiscernAnswer;
 
-export type RejectionCode = "request_failed" | "rate_limited" | "unavailable" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "refused" | "invalid_confidence" | "invalid_usage" | "invalid_model";
+export type RejectionCode = "request_failed" | "rate_limited" | "unavailable" | "timeout" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "refused" | "invalid_confidence" | "invalid_usage" | "invalid_model";
 
 export type AskResult =
   | { ok: true; answer: Record<string, DiscernAnswer>; usage: DiscernTransportReply["usage"]; model: string; provider: string }
   | { ok: false; code: RejectionCode; message: string };
 
-export interface AskConfig { env?: Env; transport?: DiscernTransport }
+export interface AskConfig extends TransportOptions {
+  env?: Env;
+  /** A run-bound transport to use instead of selecting one from the environment. */
+  transport?: DiscernTransport;
+  /** Whole-request deadline in milliseconds, covering every attempt. Default 60000. */
+  timeoutMs?: number;
+}
 
-const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel, openai];
+export const DEFAULT_TIMEOUT_MS = 60_000;
+
+// Auto-selection order; the generic compatible endpoint comes last, so it is
+// chosen only when no named carrier is configured.
+const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel, compatible, openai];
+const DRIVER_NAMES = drivers.map((driver) => driver.name);
 
 /**
  * Pick a carrier from the environment. Legacy JEV_<X> variables are read as
  * DISCERN_<X> through 1.x (see normalizeDiscernEnv); drivers see only the
  * DISCERN_ names.
  */
-export function resolveTransport(input: Env = process.env): DiscernTransport {
+export function resolveTransport(input: Env = process.env, options: TransportOptions = {}): DiscernTransport {
   const { env } = normalizeDiscernEnv(input);
   const explicit = (env.DISCERN_PROVIDER || "auto").toLowerCase();
   if (explicit !== "auto") {
     const driver = drivers.find((candidate) => candidate.name === explicit);
-    if (!driver) throw new Error("Unknown DISCERN_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, openai, or auto.");
+    if (!driver) throw new Error("Unknown DISCERN_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, compatible, openai, or auto.");
     try {
       driver.assertConfigured(env);
     } catch (error) {
       throw new Error(`DISCERN_PROVIDER=${driver.name} but ${(error as Error).message}`);
     }
-    return driver.create(env);
+    return driver.create(env, options);
   }
   const driver = drivers.find((candidate) => !candidate.explicitOnly && candidate.isConfigured(env));
   if (!driver) {
-    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or DISCERN_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY found. Set one, or DISCERN_PROVIDER to choose explicitly (DISCERN_PROVIDER=openai uses DISCERN_OPENAI_API_KEY or OPENAI_API_KEY).");
+    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or DISCERN_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY, or DISCERN_API_KEY + DISCERN_API_BASE_URL found. Set one, or DISCERN_PROVIDER to choose explicitly (DISCERN_PROVIDER=openai uses DISCERN_OPENAI_API_KEY or OPENAI_API_KEY).");
   }
-  return driver.create(env);
+  return driver.create(env, options);
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -120,10 +137,21 @@ function distribution(value: unknown, keys: string[]): { ok: true; probabilities
   return { ok: true, probabilities: Object.fromEntries(entries) };
 }
 
+const BUILTIN_LABELS = /^(TypeSafe API|OpenRouter decisions API|Cloudflare AI run|Vercel AI Gateway|OpenAI Decisions API|Jev-compatible endpoint) [^\n]{1,120}$/;
+
+/** A guarded property read: an injected transport's error must not break the non-throwing contract through a throwing getter. */
+function read(error: unknown, key: string): unknown {
+  try {
+    return (error as Record<string, unknown> | null | undefined)?.[key];
+  } catch {
+    return undefined;
+  }
+}
+
 export async function ask(input: DiscernTransportInput, config: AskConfig = {}): Promise<AskResult> {
   let transport: DiscernTransport;
   try {
-    transport = config.transport ?? resolveTransport(config.env);
+    transport = config.transport ?? resolveTransport(config.env, { maxAttempts: config.maxAttempts });
   } catch (error) {
     // Registry errors are fixed strings; never echo arbitrary driver exceptions.
     const message = error instanceof Error && /^(Unknown DISCERN_PROVIDER|No TYPESAFE_API_KEY|DISCERN_PROVIDER=|DISCERN_VERCEL_ZERO_DATA_RETENTION must|DISCERN_[A-Z0-9_]+ and JEV_[A-Z0-9_]+ are both set)/.test(error.message)
@@ -131,26 +159,30 @@ export async function ask(input: DiscernTransportInput, config: AskConfig = {}):
     return { ok: false, code: "configuration_error", message };
   }
   // Injected transport names are untrusted and never included in error text.
-  const provider = typeof transport.name === "string" && /^(typesafe|openrouter|cloudflare|vercel|openai|fixture)$/.test(transport.name) ? transport.name : "unknown";
+  const builtin = !config.transport;
+  const provider = typeof transport.name === "string" && (DRIVER_NAMES as readonly string[]).concat("fixture").includes(transport.name) ? transport.name : "unknown";
+  // One deadline covers every attempt; it and the caller's signal reach the transport as one signal.
+  const timeoutMs = Number.isInteger(config.timeoutMs) && (config.timeoutMs as number) > 0 ? config.timeoutMs as number : DEFAULT_TIMEOUT_MS;
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const signal = AbortSignal.any([input.signal, deadline]);
   let reply: DiscernTransportReply;
   try {
-    reply = await transport.ask(input);
+    reply = await transport.ask({ ...input, signal });
   } catch (error) {
-    // Transports may attach a numeric `status` to HTTP failures; classify it
-    // for callers. The read itself is guarded — an injected transport whose
-    // error throws from a status getter must not break the non-throwing
-    // contract — and the status is a number, never a response body.
-    let status: unknown;
-    try {
-      status = (error as { status?: unknown } | null | undefined)?.status;
-    } catch {
-      status = undefined;
-    }
+    if (deadline.aborted && !input.signal.aborted) return { ok: false, code: "timeout", message: `Discern provider ${provider}: no answer within the ${timeoutMs}ms deadline` };
+    // Transports may attach a numeric `status` to HTTP failures, and built-in
+    // carriers an allow-listed `detail` code; never a response body.
+    const status = read(error, "status");
+    const rawDetail = read(error, "detail");
     const httpStatus = typeof status === "number" && Number.isInteger(status) && status >= 100 && status < 600 ? status : undefined;
-    if (httpStatus === 429) return { ok: false, code: "rate_limited", message: `Discern provider ${provider}: rate limited (HTTP 429)` };
-    if (httpStatus !== undefined && httpStatus >= 500) return { ok: false, code: "unavailable", message: `Discern provider ${provider}: unavailable (HTTP ${httpStatus})` };
-    if (httpStatus !== undefined) return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed (HTTP ${httpStatus})` };
-    return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed` };
+    const detail = builtin && typeof rawDetail === "string" && /^[a-z0-9_]{1,64}$/.test(rawDetail) ? `, ${rawDetail}` : "";
+    if (httpStatus === 429) return { ok: false, code: "rate_limited", message: `Discern provider ${provider}: rate limited (HTTP 429${detail})` };
+    if (httpStatus !== undefined && httpStatus >= 500) return { ok: false, code: "unavailable", message: `Discern provider ${provider}: unavailable (HTTP ${httpStatus}${detail})` };
+    if (httpStatus !== undefined) return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed (HTTP ${httpStatus}${detail})` };
+    // Built-in carriers throw only fixed, label-prefixed messages; keep them for diagnosis.
+    const message = read(error, "message");
+    const reason = builtin && !input.signal.aborted && typeof message === "string" && BUILTIN_LABELS.test(message) ? ` (${message})` : "";
+    return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed${reason}` };
   }
   const fail = (id: string, code: RejectionCode, reason: string): AskResult => ({ ok: false, code, message: `Discern provider ${provider} question ${id}: ${reason}` });
   if (!record(input.questions)) return fail("<response>", "invalid_criteria", "questions must be an object");
