@@ -5,6 +5,7 @@ import { vercel } from "./transports/vercel.js";
 import { openai } from "./transports/openai.js";
 import { compatible } from "./transports/compatible.js";
 import { normalizeDiscernEnv } from "./env.js";
+import { CarrierFailure, CarrierHttpError } from "./transports/http.js";
 
 export interface DiscernTransportInput {
   state: unknown;
@@ -80,6 +81,8 @@ export interface AskConfig extends TransportOptions {
 }
 
 export const DEFAULT_TIMEOUT_MS = 60_000;
+// setTimeout overflows past 2^31-1 ms and fires at once; never schedule beyond it.
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 // Auto-selection order; the generic compatible endpoint comes last, so it is
 // chosen only when no named carrier is configured.
@@ -144,7 +147,6 @@ function distribution(value: unknown, keys: string[]): { ok: true; probabilities
   return { ok: true, probabilities: Object.fromEntries(entries) };
 }
 
-const BUILTIN_LABELS = /^(TypeSafe API|OpenRouter decisions API|Cloudflare AI run|Vercel AI Gateway|OpenAI Decisions API|Jev-compatible endpoint) [^\n]{1,120}$/;
 
 /** A guarded property read: an injected transport's error must not break the non-throwing contract through a throwing getter. */
 function read(error: unknown, key: string): unknown {
@@ -166,30 +168,41 @@ export async function ask(input: DiscernTransportInput, config: AskConfig = {}):
     return { ok: false, code: "configuration_error", message };
   }
   // Injected transport names are untrusted and never included in error text.
-  const builtin = !config.transport;
   const provider = typeof transport.name === "string" && (DRIVER_NAMES as readonly string[]).concat("fixture").includes(transport.name) ? transport.name : "unknown";
-  // One deadline covers every attempt; it and the caller's signal reach the transport as one signal.
-  const timeoutMs = Number.isInteger(config.timeoutMs) && (config.timeoutMs as number) > 0 ? config.timeoutMs as number : DEFAULT_TIMEOUT_MS;
-  const deadline = AbortSignal.timeout(timeoutMs);
-  const signal = AbortSignal.any([input.signal, deadline]);
+  // One deadline covers every attempt. It and the caller's signal reach the
+  // transport as one signal, owned here and released before returning, so no
+  // listener or timer outlives the call on any Node version.
+  const timeoutMs = Number.isInteger(config.timeoutMs) && (config.timeoutMs as number) > 0 ? Math.min(config.timeoutMs as number, MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
+  const caller = input.signal as AbortSignal | undefined;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException(`no answer within ${timeoutMs}ms`, "TimeoutError"));
+  }, timeoutMs);
+  const relay = () => controller.abort(caller?.reason);
+  if (caller?.aborted) relay();
+  else caller?.addEventListener?.("abort", relay, { once: true });
   let reply: DiscernTransportReply;
   try {
-    reply = await transport.ask({ ...input, signal });
+    reply = await transport.ask({ ...input, signal: controller.signal });
   } catch (error) {
-    if (deadline.aborted && !input.signal.aborted) return { ok: false, code: "timeout", message: `Discern provider ${provider}: no answer within the ${timeoutMs}ms deadline` };
-    // Transports may attach a numeric `status` to HTTP failures, and built-in
-    // carriers an allow-listed `detail` code; never a response body.
+    if (timedOut && !caller?.aborted) return { ok: false, code: "timeout", message: `Discern provider ${provider}: no answer within the ${timeoutMs}ms deadline` };
+    // HTTP failures carry a numeric `status`. Only built-in carriers
+    // (CarrierHttpError, constructible only inside this package) add an
+    // allow-listed `detail` code or a fixed message; never a response body.
     const status = read(error, "status");
-    const rawDetail = read(error, "detail");
     const httpStatus = typeof status === "number" && Number.isInteger(status) && status >= 100 && status < 600 ? status : undefined;
-    const detail = builtin && typeof rawDetail === "string" && /^[a-z0-9_]{1,64}$/.test(rawDetail) ? `, ${rawDetail}` : "";
+    const rawDetail = error instanceof CarrierHttpError ? error.detail : undefined;
+    const detail = typeof rawDetail === "string" && /^[a-z0-9_]{1,64}$/.test(rawDetail) ? `, ${rawDetail}` : "";
     if (httpStatus === 429) return { ok: false, code: "rate_limited", message: `Discern provider ${provider}: rate limited (HTTP 429${detail})` };
     if (httpStatus !== undefined && httpStatus >= 500) return { ok: false, code: "unavailable", message: `Discern provider ${provider}: unavailable (HTTP ${httpStatus}${detail})` };
     if (httpStatus !== undefined) return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed (HTTP ${httpStatus}${detail})` };
-    // Built-in carriers throw only fixed, label-prefixed messages; keep them for diagnosis.
-    const message = read(error, "message");
-    const reason = builtin && !input.signal.aborted && typeof message === "string" && BUILTIN_LABELS.test(message) ? ` (${message})` : "";
-    return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed${reason}` };
+    const message = error instanceof CarrierFailure && !caller?.aborted ? ` (${error.message})` : "";
+    return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed${message}` };
+  } finally {
+    clearTimeout(timer);
+    caller?.removeEventListener?.("abort", relay);
   }
   try {
     config.onReply?.(reply);

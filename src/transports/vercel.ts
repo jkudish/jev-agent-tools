@@ -1,12 +1,12 @@
 import type { BuiltinDriver } from "../provider.js";
-import { CarrierHttpError, postJson } from "./http.js";
+import { CarrierFailure, CarrierHttpError, postJson } from "./http.js";
 
 type Evaluation = (args: { apiKey: string; model: string; state: unknown; questions: Record<string, unknown>; signal: AbortSignal; maxAttempts?: number; providerOptions?: { gateway: { zeroDataRetention: true } } }) => Promise<any>;
 
 function zeroDataRetention(value: string | undefined): boolean {
   if (value === undefined || value === "" || /^(0|false)$/i.test(value)) return false;
   if (/^(1|true)$/i.test(value)) return true;
-  throw new Error("DISCERN_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true.");
+  throw new CarrierFailure("DISCERN_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true.");
 }
 
 function evaluate({ apiKey, model, state, questions, signal, maxAttempts, providerOptions }: Parameters<Evaluation>[0]): Promise<any> {
@@ -26,7 +26,7 @@ export function createVercelDriver(evaluateRequest: Evaluation = evaluate): Buil
     name: "vercel",
     isConfigured: (env) => Boolean(env.AI_GATEWAY_API_KEY),
     assertConfigured(env) {
-      if (!this.isConfigured(env)) throw new Error("AI_GATEWAY_API_KEY is not set.");
+      if (!this.isConfigured(env)) throw new CarrierFailure("AI_GATEWAY_API_KEY is not set.");
     },
     create(env, options = {}) {
       this.assertConfigured(env);
@@ -49,9 +49,9 @@ export function createVercelDriver(evaluateRequest: Evaluation = evaluate): Buil
             if (error instanceof CarrierHttpError) throw error;
             const status = (error as { statusCode?: unknown } | null)?.statusCode;
             if (typeof status === "number") throw new CarrierHttpError("Vercel AI Gateway", status);
-            throw new Error("Vercel AI Gateway request failed");
+            throw new CarrierFailure("Vercel AI Gateway request failed");
           }
-          if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Vercel AI Gateway returned an invalid envelope (response omitted)");
+          if (!result || typeof result !== "object" || Array.isArray(result)) throw new CarrierFailure("Vercel AI Gateway returned an invalid envelope (response omitted)");
           const usage = result.usage;
           const counters = usage !== null && typeof usage === "object" && !Array.isArray(usage)
             ? { input_tokens: Object.hasOwn(usage, "inputTokens") ? usage.inputTokens : 0, output_tokens: Object.hasOwn(usage, "outputTokens") ? usage.outputTokens : 0 }
