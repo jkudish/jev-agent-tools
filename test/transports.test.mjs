@@ -835,3 +835,17 @@ test("only listed JEV_ variables alias DISCERN_ ones; consumers extend the list"
   assert.equal(env.DISCERN_MCP_MODELX, undefined);
   assert.deepEqual(legacy, ["JEV_MCP_MODEL", "JEV_PASSWORD_ACME"]);
 });
+
+test("onReply sees the raw reply of a built-in carrier without losing its diagnostics", async () => {
+  let seen;
+  await withFetch(async () => Response.json({ answers: { ...answers, extra: { type: "noul", noul: 2 } }, usage, model: "jev-1.13.0" }), async () => {
+    const result = await ask(input, { env: { TYPESAFE_API_KEY: "t" }, onReply: (reply) => { seen = reply; throw new Error("observer-secret"); } });
+    rejected(result, "answer_id_mismatch", /unexpected answer ID/);
+  });
+  assert.equal(seen.model, "jev-1.13.0");
+  assert.equal(seen.answers.extra.noul, 2);
+  // Using onReply instead of wrapping the transport keeps built-in error detail.
+  await withFetch(async () => Response.json({ error: { message: 'HTTP 400: {"detail":{"error_type":"max_tokens_exceeded"}}' } }, { status: 400 }), async () => {
+    rejected(await ask(input, { env: { OPENROUTER_API_KEY: "sk-or-x" }, onReply: () => {} }), "request_failed", /HTTP 400, max_tokens_exceeded/);
+  });
+});

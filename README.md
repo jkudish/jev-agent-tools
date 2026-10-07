@@ -64,7 +64,7 @@ Auto-selection tries them in this order:
 
 The neutral model alias `latest` means each carrier's current default model: Jev on TypeSafe, OpenRouter, Cloudflare, Vercel, and compatible endpoints, and `gpt-6-luna` on OpenAI. `jev-latest` keeps working.
 
-Set `DISCERN_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, `openai`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through; an empty value means `auto`. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one.
+Set `DISCERN_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, `openai`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through; an empty value means `auto`. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one. `config.onReply` receives the raw, unvalidated reply before validation, for callers that judge each answer on their own; treat it as untrusted input.
 
 ## Validation
 
