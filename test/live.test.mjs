@@ -17,7 +17,7 @@ test("one real TypeSafe judgment", { skip: !process.env.TYPESAFE_API_KEY }, asyn
   assert.ok(result.model.trim());
 });
 
-test("one real OpenAI Decisions judgment of each type", { skip: !(process.env.JEV_OPENAI_API_KEY || process.env.OPENAI_API_KEY) }, async () => {
+test("one real OpenAI Decisions judgment of each type", { skip: !(process.env.DISCERN_OPENAI_API_KEY || process.env.JEV_OPENAI_API_KEY || process.env.OPENAI_API_KEY) }, async () => {
   const result = await ask({
     state: { ticket: "I was charged twice for my order and want my money back." },
     questions: {
@@ -27,7 +27,7 @@ test("one real OpenAI Decisions judgment of each type", { skip: !(process.env.JE
     },
     model: "jev-latest",
     signal: AbortSignal.timeout(30_000),
-  }, { env: { JEV_PROVIDER: "openai", JEV_OPENAI_API_KEY: process.env.JEV_OPENAI_API_KEY, OPENAI_API_KEY: process.env.OPENAI_API_KEY } });
+  }, { env: { DISCERN_PROVIDER: "openai", DISCERN_OPENAI_API_KEY: process.env.DISCERN_OPENAI_API_KEY || process.env.JEV_OPENAI_API_KEY, OPENAI_API_KEY: process.env.OPENAI_API_KEY } });
   assert.equal(result.ok, true, result.ok ? "" : `${result.code}: ${result.message}`);
   assert.equal(result.provider, "openai");
   assert.ok(result.answer.refund.noul > 0.5, `refund ${result.answer.refund.noul}`);

@@ -2,13 +2,13 @@ import type { BuiltinDriver } from "../provider.js";
 
 export const cloudflare: BuiltinDriver = {
   name: "cloudflare",
-  isConfigured: (env) => Boolean((env.JEV_CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_API_TOKEN) && env.CLOUDFLARE_ACCOUNT_ID),
+  isConfigured: (env) => Boolean((env.DISCERN_CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_API_TOKEN) && env.CLOUDFLARE_ACCOUNT_ID),
   assertConfigured(env) {
-    if (!this.isConfigured(env)) throw new Error("a Cloudflare API token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) and CLOUDFLARE_ACCOUNT_ID are not both set.");
+    if (!this.isConfigured(env)) throw new Error("a Cloudflare API token (CLOUDFLARE_API_TOKEN or DISCERN_CLOUDFLARE_API_TOKEN) and CLOUDFLARE_ACCOUNT_ID are not both set.");
   },
   create(env) {
     this.assertConfigured(env);
-    const token = env.JEV_CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_API_TOKEN;
+    const token = env.DISCERN_CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_API_TOKEN;
     const account = env.CLOUDFLARE_ACCOUNT_ID!;
     return {
       name: this.name,

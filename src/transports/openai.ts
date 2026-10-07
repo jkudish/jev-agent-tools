@@ -3,7 +3,7 @@ import { postJsonWithRetry } from "./http.js";
 
 // OpenAI Decisions API (public beta): https://developers.openai.com/api/docs/guides/decisions
 // It is not Jev: a different model (gpt-6-luna) with its own calibration, so
-// thresholds tuned on Jev do not transfer. Explicit-only (JEV_PROVIDER=openai)
+// thresholds tuned on Jev do not transfer. Explicit-only (DISCERN_PROVIDER=openai)
 // because OPENAI_API_KEY is common in environments that never chose it.
 
 const LABEL = "OpenAI Decisions API";
@@ -13,7 +13,7 @@ const MAX_QUESTIONS_PER_REQUEST = 200;
 
 /**
  * Jev questions refer to "the state", so name it, and pretty-print it. Measured
- * on captured jev-mcp and jev-browser requests, this removed a choice refusal
+ * on captured discern-mcp and discern-browser requests, this removed a choice refusal
  * and raised agreement with TypeSafe over compact unlabeled JSON. String state
  * is sent unchanged.
  */
@@ -107,15 +107,15 @@ export function adaptOpenAIAnswers(answers: unknown, nouls: ReadonlySet<string> 
 export const openai: BuiltinDriver = {
   name: "openai",
   explicitOnly: true,
-  isConfigured: (env) => Boolean(env.JEV_OPENAI_API_KEY || env.OPENAI_API_KEY),
+  isConfigured: (env) => Boolean(env.DISCERN_OPENAI_API_KEY || env.OPENAI_API_KEY),
   assertConfigured(env) {
-    if (!this.isConfigured(env)) throw new Error("JEV_OPENAI_API_KEY or OPENAI_API_KEY is not set.");
+    if (!this.isConfigured(env)) throw new Error("DISCERN_OPENAI_API_KEY or OPENAI_API_KEY is not set.");
   },
   create(env) {
     this.assertConfigured(env);
-    const key = (env.JEV_OPENAI_API_KEY || env.OPENAI_API_KEY)!;
+    const key = (env.DISCERN_OPENAI_API_KEY || env.OPENAI_API_KEY)!;
     // Deliberately not OPENAI_BASE_URL: proxies configured for chat rarely serve /decisions.
-    const url = `${(env.JEV_OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "")}/decisions`;
+    const url = `${(env.DISCERN_OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "")}/decisions`;
     return {
       name: this.name,
       async ask({ state, questions, model, signal }) {

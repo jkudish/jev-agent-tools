@@ -5,7 +5,7 @@ type Evaluation = (args: { apiKey: string; model: string; state: unknown; questi
 function zeroDataRetention(value: string | undefined): boolean {
   if (value === undefined || value === "" || /^(0|false)$/i.test(value)) return false;
   if (/^(1|true)$/i.test(value)) return true;
-  throw new Error("JEV_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true.");
+  throw new Error("DISCERN_VERCEL_ZERO_DATA_RETENTION must be unset, empty, 0, false, 1, or true.");
 }
 
 async function evaluate({ apiKey, model, state, questions, signal, providerOptions }: Parameters<Evaluation>[0]): Promise<any> {
@@ -37,7 +37,7 @@ export function createVercelDriver(evaluateRequest: Evaluation = evaluate): Buil
     create(env) {
       this.assertConfigured(env);
       const key = env.AI_GATEWAY_API_KEY!;
-      const providerOptions = zeroDataRetention(env.JEV_VERCEL_ZERO_DATA_RETENTION) ? { gateway: { zeroDataRetention: true as const } } : undefined;
+      const providerOptions = zeroDataRetention(env.DISCERN_VERCEL_ZERO_DATA_RETENTION) ? { gateway: { zeroDataRetention: true as const } } : undefined;
       return {
         name: this.name,
         async ask({ state, questions, model, signal }) {
