@@ -1,5 +1,5 @@
 import type { BuiltinDriver } from "../provider.js";
-import { postJson } from "./http.js";
+import { CarrierFailure, postJson } from "./http.js";
 
 // OpenAI Decisions API (public beta): https://developers.openai.com/api/docs/guides/decisions
 // It is not Jev: a different model (gpt-6-luna) with its own calibration, so
@@ -58,7 +58,7 @@ export function toDecisionQuestion(name: string, question: unknown): DecisionQue
   if (q.type === "score" && Array.isArray(q.criteria)) {
     return { type: "score", name, instructions, levels: q.criteria.map((description, index) => described(description) ? { label: String(index), description } : { label: String(index) }) };
   }
-  throw new Error(`${LABEL} unsupported question (request not sent)`);
+  throw new CarrierFailure(`${LABEL} unsupported question (request not sent)`);
 }
 
 /** Probabilities arrive as [{value, probability}]; Jev keys them by criterion. Malformed or duplicate entries fail closed as null. */
@@ -119,7 +119,7 @@ export const openai: BuiltinDriver = {
   explicitOnly: true,
   isConfigured: (env) => Boolean(env.DISCERN_OPENAI_API_KEY || env.OPENAI_API_KEY),
   assertConfigured(env) {
-    if (!this.isConfigured(env)) throw new Error("DISCERN_OPENAI_API_KEY or OPENAI_API_KEY is not set.");
+    if (!this.isConfigured(env)) throw new CarrierFailure("DISCERN_OPENAI_API_KEY or OPENAI_API_KEY is not set.");
   },
   create(env, options = {}) {
     this.assertConfigured(env);
@@ -132,7 +132,7 @@ export const openai: BuiltinDriver = {
         const effectiveRequest = openaiDecisionsModel(model);
         const input = toDecisionInput(state);
         const translated = Object.entries(questions).map(([name, question]) => toDecisionQuestion(name, question));
-        if (!translated.length) throw new Error(`${LABEL} has no questions (request not sent)`);
+        if (!translated.length) throw new CarrierFailure(`${LABEL} has no questions (request not sent)`);
         const nouls = new Set(Object.entries(questions).filter(([, question]) => record(question) && question.type === "noul").map(([name]) => name));
         const chunks: DecisionQuestion[][] = [];
         for (let i = 0; i < translated.length; i += MAX_QUESTIONS_PER_REQUEST) chunks.push(translated.slice(i, i + MAX_QUESTIONS_PER_REQUEST));
@@ -169,7 +169,7 @@ export const openai: BuiltinDriver = {
           return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : NaN;
         };
         for (const reply of replies) {
-          if (!record(reply)) throw new Error(`${LABEL} invalid envelope (response omitted)`);
+          if (!record(reply)) throw new CarrierFailure(`${LABEL} invalid envelope (response omitted)`);
           const usage = reply.usage;
           // A malformed usage container poisons the sums like a malformed counter.
           if (usage !== undefined && !record(usage)) {

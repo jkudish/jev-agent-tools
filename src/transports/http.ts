@@ -47,8 +47,14 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
   signal.addEventListener("abort", onAbort, { once: true });
 });
 
+/**
+ * A built-in carrier's failure. Messages are fixed strings written in this
+ * package, so ask() may show them; errors from injected transports never are.
+ */
+export class CarrierFailure extends Error {}
+
 /** An HTTP failure: a fixed message, the numeric status, and optionally an allow-listed detail code. Never a response body. */
-export class CarrierHttpError extends Error {
+export class CarrierHttpError extends CarrierFailure {
   constructor(label: string, readonly status: number, readonly detail?: string) {
     super(`${label} HTTP ${status}${detail ? ` (${detail})` : ""} (response omitted)`);
   }
@@ -65,13 +71,13 @@ async function readBounded(response: Response, signal: AbortSignal, label: strin
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_RESPONSE_BYTES) throw new Error(`${label} response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+      if (total > MAX_RESPONSE_BYTES) throw new CarrierFailure(`${label} response exceeded ${MAX_RESPONSE_BYTES} bytes`);
       chunks.push(value);
     }
   } catch (error) {
     if (signal.aborted) throw signal.reason;
-    if (error instanceof Error && error.message.startsWith(`${label} response exceeded`)) throw error;
-    throw new Error(`${label} request failed`);
+    if (error instanceof CarrierFailure) throw error;
+    throw new CarrierFailure(`${label} request failed`);
   } finally {
     // Releases the connection when the read stopped early.
     void reader.cancel().catch(() => {});
@@ -98,7 +104,7 @@ export async function postJson(url: string, headers: Record<string, string>, bod
       wire = await fetch(url, { method: "POST", headers, body, signal });
     } catch {
       if (signal.aborted) throw signal.reason;
-      throw new Error(`${label} request failed`); // network failure: never re-sent
+      throw new CarrierFailure(`${label} request failed`); // network failure: never re-sent
     }
     if (retryable(wire.status) && attempt < attempts) {
       // Fire-and-forget the connection release; awaiting a stream
@@ -121,7 +127,7 @@ export async function postJson(url: string, headers: Record<string, string>, bod
       return JSON.parse(text);
     } catch {
       // JSON.parse errors quote their input; a reflecting endpoint must not leak through them.
-      throw new Error(`${label} returned an unparseable response`);
+      throw new CarrierFailure(`${label} returned an unparseable response`);
     }
   }
 }

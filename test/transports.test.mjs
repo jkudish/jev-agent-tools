@@ -849,3 +849,33 @@ test("onReply sees the raw reply of a built-in carrier without losing its diagno
     rejected(await ask(input, { env: { OPENROUTER_API_KEY: "sk-or-x" }, onReply: () => {} }), "request_failed", /HTTP 400, max_tokens_exceeded/);
   });
 });
+
+test("oracle fixes: no leaked listeners or timers, clamped timeout, optional signal, built-in-only detail", async () => {
+  // A long-lived caller signal gains no lasting listener, even with a transport that ignores its signal.
+  const caller = new AbortController();
+  const added = [];
+  const removed = [];
+  const add = caller.signal.addEventListener.bind(caller.signal);
+  const remove = caller.signal.removeEventListener.bind(caller.signal);
+  caller.signal.addEventListener = (type, fn, opts) => { added.push(fn); add(type, fn, opts); };
+  caller.signal.removeEventListener = (type, fn, opts) => { removed.push(fn); remove(type, fn, opts); };
+  for (let i = 0; i < 5; i++) assert.equal((await askJev(carrier(), { ...input, signal: caller.signal })).ok, true);
+  assert.equal(added.length, 5);
+  assert.deepEqual(removed, added);
+
+  // An out-of-range timeout is clamped instead of throwing or firing at once.
+  assert.equal((await ask(input, { transport: carrier(), timeoutMs: 99_999_999_999 })).ok, true);
+  // A JavaScript caller that omits the signal still gets a result.
+  assert.equal((await ask({ ...input, signal: undefined }, { transport: carrier() })).ok, true);
+
+  // Built-in errors keep their fixed reason; an injected transport's message never appears, even if it mimics one.
+  await withFetch(async () => new Response("not json", { status: 200 }), async () => {
+    rejected(await ask(input, { env: { TYPESAFE_API_KEY: "t" } }), "request_failed", /request failed \(TypeSafe API returned an unparseable response\)$/);
+  });
+  rejected(await ask(input, { transport: { name: "fixture", ask: async () => { throw new Error("TypeSafe API body-secret"); } } }), "request_failed", /request failed$/);
+  // An injected transport wrapping a built-in one (as discern-browser does) keeps the built-in detail.
+  const wrappedOpenRouter = (inner) => ({ name: inner.name, ask: (request) => inner.ask(request) });
+  await withFetch(async () => Response.json({ error: { message: 'HTTP 400: {"detail":{"error_type":"max_tokens_exceeded"}}' } }, { status: 400 }), async () => {
+    rejected(await ask(input, { transport: wrappedOpenRouter(resolveTransport({ OPENROUTER_API_KEY: "sk-or-x" })) }), "request_failed", /HTTP 400, max_tokens_exceeded/);
+  });
+});

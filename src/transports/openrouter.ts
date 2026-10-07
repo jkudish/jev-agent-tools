@@ -1,5 +1,5 @@
 import type { BuiltinDriver } from "../provider.js";
-import { apiUrl, postJson, usageOf } from "./http.js";
+import { CarrierFailure, apiUrl, postJson, usageOf } from "./http.js";
 
 const TITLE = "discern";
 const REFERER = "https://github.com/jkudish/discern-agent-tools";
@@ -37,7 +37,7 @@ export const openrouter: BuiltinDriver = {
   name: "openrouter",
   isConfigured: (env) => /^sk-or-/.test(env.OPENROUTER_API_KEY ?? ""),
   assertConfigured(env) {
-    if (!this.isConfigured(env)) throw new Error("OPENROUTER_API_KEY is not set or not an sk-or- key.");
+    if (!this.isConfigured(env)) throw new CarrierFailure("OPENROUTER_API_KEY is not set or not an sk-or- key.");
   },
   create(env, options = {}) {
     this.assertConfigured(env);
@@ -54,7 +54,7 @@ export const openrouter: BuiltinDriver = {
           "X-Title": TITLE,
           "X-OpenRouter-Title": TITLE,
         }, JSON.stringify({ model: slug, state, questions }), { label: "OpenRouter decisions API", signal, maxAttempts: options.maxAttempts, errorDetail: openrouterErrorType }) as Record<string, unknown> | null;
-        if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("OpenRouter decisions API returned an invalid envelope (response omitted)");
+        if (!body || typeof body !== "object" || Array.isArray(body)) throw new CarrierFailure("OpenRouter decisions API returned an invalid envelope (response omitted)");
         // Report the effective snapshot; a present-but-malformed value reaches shared validation.
         return { answers: body.answers, usage: usageOf(body.usage), model: (Object.hasOwn(body, "model") ? body.model : slug) as string };
       },

@@ -1,5 +1,5 @@
 import type { BuiltinDriver } from "../provider.js";
-import { postJson, usageOf } from "./http.js";
+import { CarrierFailure, postJson, usageOf } from "./http.js";
 
 /** Map a model name to a TypeSafe model id; the neutral `latest` alias is `jev-latest`. */
 export const typesafeModel = (model: string) => (model === "latest" ? "jev-latest" : model);
@@ -8,7 +8,7 @@ export const typesafe: BuiltinDriver = {
   name: "typesafe",
   isConfigured: (env) => Boolean(env.TYPESAFE_API_KEY),
   assertConfigured(env) {
-    if (!this.isConfigured(env)) throw new Error("TYPESAFE_API_KEY is not set.");
+    if (!this.isConfigured(env)) throw new CarrierFailure("TYPESAFE_API_KEY is not set.");
   },
   create(env, options = {}) {
     this.assertConfigured(env);
@@ -24,7 +24,7 @@ export const typesafe: BuiltinDriver = {
           JSON.stringify({ state, questions, model: requested }),
           { label: "TypeSafe API", signal, maxAttempts: options.maxAttempts },
         ) as Record<string, unknown> | null;
-        if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("TypeSafe API returned an invalid envelope (response omitted)");
+        if (!body || typeof body !== "object" || Array.isArray(body)) throw new CarrierFailure("TypeSafe API returned an invalid envelope (response omitted)");
         // Report the effective model the API answered with, not the alias we
         // requested. A present-but-malformed value passes through so shared
         // validation rejects it instead of masking it.
