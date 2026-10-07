@@ -74,10 +74,20 @@ function keyedProbabilities(entries: unknown, valid: (value: unknown) => boolean
   return Object.fromEntries(keyed);
 }
 
-/** The weight on true from a boolean choice; null (rejected as invalid_noul) unless the distribution is exactly {true, false}. */
-function trueWeight(entries: unknown): number | null {
-  const keyed = keyedProbabilities(entries, (value) => typeof value === "boolean");
-  return keyed && Object.keys(keyed).length === 2 && typeof keyed.true === "number" ? keyed.true : null;
+/**
+ * The weight on true from a boolean choice, or null (rejected as invalid_noul).
+ * The distribution must be exactly {true, false}, both finite in [0,1] and
+ * summing to 1 within two-decimal rounding, and the reported choice must be its
+ * maximum (0.001 tie), so a contradictory answer can never become a noul.
+ */
+function trueWeight(answer: Record<string, unknown>): number | null {
+  const keyed = keyedProbabilities(answer.probabilities, (value) => typeof value === "boolean");
+  if (!keyed || Object.keys(keyed).length !== 2) return null;
+  const [yes, no] = [keyed.true, keyed.false];
+  const unit = (p: unknown): p is number => typeof p === "number" && Number.isFinite(p) && p >= 0 && p <= 1;
+  if (!unit(yes) || !unit(no) || Math.abs(yes + no - 1) > 0.01 + 1e-9) return null;
+  if (typeof answer.choice !== "boolean" || (answer.choice ? yes : no) + 0.001 < Math.max(yes, no)) return null;
+  return yes;
 }
 
 /**
@@ -94,7 +104,7 @@ export function adaptOpenAIAnswers(answers: unknown, nouls: ReadonlySet<string> 
     if (!record(answer) || typeof answer.name !== "string" || seen.has(answer.name)) return answers;
     seen.add(answer.name);
     const confidence = answer.confidence === undefined ? null : answer.confidence;
-    if (nouls.has(answer.name) && answer.type === "choice") adapted.push([answer.name, { type: "noul", noul: trueWeight(answer.probabilities) }]);
+    if (nouls.has(answer.name) && answer.type === "choice") adapted.push([answer.name, { type: "noul", noul: trueWeight(answer) }]);
     else if (answer.type === "predicate") adapted.push([answer.name, { type: "noul", noul: answer.probability }]);
     else if (answer.type === "choice") adapted.push([answer.name, { type: "choice", choice: answer.choice, probabilities: keyedProbabilities(answer.probabilities, (value) => typeof value === "string"), confidence }]);
     else if (answer.type === "score") adapted.push([answer.name, { type: "score", score: answer.score, probabilities: keyedProbabilities(answer.probabilities, Number.isSafeInteger), confidence }]);
@@ -126,14 +136,29 @@ export const openai: BuiltinDriver = {
         const nouls = new Set(Object.entries(questions).filter(([, question]) => record(question) && question.type === "noul").map(([name]) => name));
         const chunks: DecisionQuestion[][] = [];
         for (let i = 0; i < translated.length; i += MAX_QUESTIONS_PER_REQUEST) chunks.push(translated.slice(i, i + MAX_QUESTIONS_PER_REQUEST));
-        // Chunks share the input and run concurrently; any failure fails the call.
-        const replies = await Promise.all(chunks.map((chunk) => postJsonWithRetry(
-          url,
-          { Authorization: `Bearer ${key}`, Accept: "application/json", "Content-Type": "application/json" },
-          JSON.stringify({ model: effectiveRequest, input, questions: chunk }),
-          signal,
-          LABEL,
-        )));
+        // Chunks share the input and run concurrently; any failure fails the
+        // call and cancels its siblings, so no request or retry outlives ask().
+        const siblings = new AbortController();
+        const cancel = () => siblings.abort(signal.reason);
+        if (signal.aborted) cancel();
+        else signal.addEventListener("abort", cancel, { once: true });
+        let replies: unknown[];
+        try {
+          replies = await Promise.all(chunks.map((chunk) => postJsonWithRetry(
+            url,
+            { Authorization: `Bearer ${key}`, Accept: "application/json", "Content-Type": "application/json" },
+            JSON.stringify({ model: effectiveRequest, input, questions: chunk }),
+            siblings.signal,
+            LABEL,
+          )));
+        } catch (error) {
+          siblings.abort();
+          // A caller's abort keeps its own reason; sibling cancellation is internal.
+          if (signal.aborted) throw signal.reason;
+          throw error;
+        } finally {
+          signal.removeEventListener("abort", cancel);
+        }
         let answers: unknown[] | null = [];
         let inputTokens = 0;
         let outputTokens = 0;

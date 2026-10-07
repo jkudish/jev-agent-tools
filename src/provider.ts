@@ -45,7 +45,8 @@ export type DiscernAnswer =
   | { type: "noul"; noul: number }
   | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number | null }
   // Score is the probability-weighted mean of level indices (it can fall
-  // between levels); some carriers report an integer level instead.
+  // between levels) or, for some carriers, the most likely level. Validation
+  // guarantees it is one of the two; use `probabilities` for anything finer.
   | { type: "score"; score: number; probabilities: Record<string, number>; confidence: number | null };
 
 /** @deprecated Use DiscernAnswer. Removed in 2.0. */
@@ -162,8 +163,9 @@ export async function ask(input: DiscernTransportInput, config: AskConfig = {}):
   for (const id of ids) {
     const question = input.questions[id];
     const answer = answers[id];
+    if (!record(question)) return fail(id, "malformed_answer", "missing answer or wrong type");
     if (record(answer) && answer.type === "refusal") return fail(id, "refused", "provider declined to answer");
-    if (!record(question) || !record(answer) || answer.type !== question.type) return fail(id, "malformed_answer", "missing answer or wrong type");
+    if (!record(answer) || answer.type !== question.type) return fail(id, "malformed_answer", "missing answer or wrong type");
     if (question.type === "noul") {
       if (typeof answer.noul !== "number" || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1) return fail(id, "invalid_noul", "noul must be finite in [0,1]");
       validated.push([id, { type: "noul", noul: answer.noul as number }]);
@@ -185,17 +187,19 @@ export async function ask(input: DiscernTransportInput, config: AskConfig = {}):
     } else if (question.type === "score") {
       const score = answer.score;
       if (typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > keys.length - 1) return fail(id, "invalid_choice", "score is outside criteria levels");
-      // An integer names a level. A fractional score is the distribution's
-      // mean, within the two-decimal rounding of each weighted probability.
-      if (!Number.isInteger(score)) {
-        let mean = 0;
-        let weight = 1;
-        for (const key of keys) {
-          mean += Number(key) * probabilities[key];
-          if (probabilities[key] > 0) weight += Number(key);
-        }
-        if (Math.abs(mean - score) > Math.max(0.02, ROUNDING_STEP * weight) + 1e-9) return fail(id, "invalid_distribution", "score does not match the distribution mean");
+      // Carriers report either the distribution's mean (Jev, Clef, OpenAI;
+      // can fall between levels) or its most likely level (an integer). Accept
+      // a score only when it is one of those, so it always agrees with the
+      // distribution it came with.
+      let mean = 0;
+      let weight = 1;
+      for (const key of keys) {
+        mean += Number(key) * probabilities[key];
+        if (probabilities[key] > 0) weight += Number(key);
       }
+      const isMean = Math.abs(mean - score) <= Math.max(0.02, ROUNDING_STEP * weight) + 1e-9;
+      const isMostLikely = Number.isInteger(score) && probabilities[String(score)] + 0.001 >= Math.max(...Object.values(probabilities));
+      if (!isMean && !isMostLikely) return fail(id, "invalid_distribution", "score matches neither the distribution mean nor its most likely level");
       validated.push([id, { type: "score", score, probabilities, confidence: confidence as number | null }]);
     } else return fail(id, "malformed_answer", "unsupported question type");
   }

@@ -23,7 +23,7 @@ npm install @jkudish/discern-agent-tools
 
 ## Result contract
 
-`ask(input, config?)` returns `Promise<{ ok: true, answer, usage, model, provider } | { ok: false, code, message }>` and never throws a verdict. The TypeSafe transport retries 408/409/429/5xx up to three attempts, honoring `Retry-After` within the caller's abort signal. Transport failures return `request_failed` (message includes the HTTP status when there is one), `rate_limited` when 429 retries are exhausted, or `unavailable` when 5xx retries are exhausted, and report the API's effective model rather than the requested alias; invalid responses return specific codes such as `refused` (the carrier declined a question), `answer_id_mismatch`, `invalid_distribution`, `invalid_noul`, `invalid_usage`, and `invalid_model`; configuration errors return `configuration_error`. Messages never include response bodies or credentials. The two consumers need different error behavior: discern-browser maps `!ok` to its own exception, while discern-mcp maps `!ok` to `invalid_response`.
+`ask(input, config?)` returns `Promise<{ ok: true, answer, usage, model, provider } | { ok: false, code, message }>` and never throws a verdict. The TypeSafe and OpenAI transports retry 408/409/429/5xx up to three attempts, honoring `Retry-After` within the caller's abort signal. Transport failures return `request_failed` (message includes the HTTP status when there is one), `rate_limited` when 429 retries are exhausted, or `unavailable` when 5xx retries are exhausted, and report the API's effective model rather than the requested alias; invalid responses return specific codes such as `refused` (the carrier declined a question), `answer_id_mismatch`, `invalid_distribution`, `invalid_noul`, `invalid_usage`, and `invalid_model`; configuration errors return `configuration_error`. Messages never include response bodies or credentials. The two consumers need different error behavior: discern-browser maps `!ok` to its own exception, while discern-mcp maps `!ok` to `invalid_response`.
 
 ```js
 import { ask } from "@jkudish/discern-agent-tools";
@@ -64,7 +64,7 @@ Set `DISCERN_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `ope
 
 ## Validation
 
-Every reply is checked before you see it. Validation requires exactly the requested answer IDs and criterion IDs, finite probabilities in [0,1] summing to within 0.01 of 1, and a selected Choice maximum within a 0.001 tie tolerance. Score answers must be an integer level or, when fractional, the probability-weighted mean of their distribution within two-decimal rounding. Noul values must be in [0,1], confidence finite or null, usage counters non-negative safe integers, and the effective model nonempty. An invalid answer yields `ok: false` before any usage is credited, so a malformed response can never become a decision.
+Every reply is checked before you see it. Validation requires exactly the requested answer IDs and criterion IDs, finite probabilities in [0,1] summing to 1 within two-decimal rounding (0.5% per nonzero option, at least 1% and at most 5%), and a selected Choice maximum within a 0.001 tie tolerance. A score must agree with its distribution: either the probability-weighted mean of the level indices (within two-decimal rounding, so it can fall between levels) or the most likely level. A refused question yields `refused` and fails the whole call; callers that want per-question results split their questions. Noul values must be in [0,1], confidence finite or null, usage counters non-negative safe integers, and the effective model nonempty. An invalid answer yields `ok: false` before any usage is credited, so a malformed response can never become a decision.
 
 ## Adding a provider
 
@@ -121,9 +121,9 @@ Published a driver package? Open an issue or pull request on any of the three re
 The built-ins are a fixed, maintainer-curated set (TypeSafe, OpenRouter, Cloudflare, Vercel, OpenAI). New built-ins are generally not accepted unless sufficient demand is shown — open an issue first. The mechanics, for when one is accepted:
 
 - Add `src/transports/<name>.ts` exporting a driver: `name`, `isConfigured(env)`, `assertConfigured(env)`, and `create(env)` returning a `DiscernTransport`.
-- Register it in the `drivers` array in `src/provider.ts`, which widens the `BuiltinDriver` name union. Pick its auto-detection position deliberately; the order is the documented precedence.
+- Register it in the `drivers` array in `src/provider.ts`, and add its name to the `BuiltinDriver` name union. Pick its auto-detection position deliberately; the order is the documented precedence.
 - Map `jev-latest` to the model id the carrier actually serves, like the OpenRouter and Cloudflare mappings above.
-- Throw fixed-string errors only. The registry forwards messages that start with `Unknown DISCERN_PROVIDER`, the no-credentials diagnostic, or `DISCERN_PROVIDER=`; anything else is replaced by a generic message. Never include response bodies.
+- Throw fixed-string errors only. The registry forwards only its own fixed messages (unknown `DISCERN_PROVIDER`, the no-credentials diagnostic, `DISCERN_PROVIDER=` errors, the Vercel ZDR value error, and `JEV_`/`DISCERN_` conflicts); anything else is replaced by a generic message. Never include response bodies.
 - Add hermetic tests against a stubbed endpoint. A live smoke behind a real key is welcome but optional.
 
 ### Consumer-side wiring
@@ -137,7 +137,7 @@ discern-browser picks new built-ins up automatically through this package. disce
 
 ## Migrating from jev-agent-tools
 
-1.0.0 renames the package; behavior is unchanged apart from the OpenAI carrier and the fractional-score fix listed in the [changelog](CHANGELOG.md).
+1.0.0 renames the package and adds the OpenAI carrier and Cloudflare's Clef models. Smaller behavior changes are listed in the [changelog](CHANGELOG.md): fractional and stricter score validation, the `refused` rejection code, an empty `DISCERN_PROVIDER` meaning `auto`, and the OpenRouter attribution title.
 
 - Install `@jkudish/discern-agent-tools` and update imports. `@jkudish/jev-agent-tools` is deprecated and receives no further releases.
 - Rename environment variables from `JEV_<X>` to `DISCERN_<X>`. Through 1.x the old names still work: a `JEV_` value is used when its `DISCERN_` counterpart is unset or empty, and two different non-empty values are a configuration error that names both variables. `JEV_` names stop working in 2.0.

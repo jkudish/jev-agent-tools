@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ask, cloudflareModel, normalizeDiscernEnv, openaiDecisionsModel, openrouterJevModel, resolveTransport } from "../dist/index.js";
+import { ask, cloudflareModel, normalizeDiscernEnv, openaiDecisionsModel, openrouterJevModel, openrouterModel, resolveTransport } from "../dist/index.js";
 import { typesafe } from "../dist/transports/typesafe.js";
 import { openrouter } from "../dist/transports/openrouter.js";
 import { cloudflare } from "../dist/transports/cloudflare.js";
@@ -649,9 +649,12 @@ test("score accepts an integer level or the distribution mean, nothing else", as
   const reply = (value, probabilities = { "0": 0, "1": 0.34, "2": 0.66 }) => carrier({ answers: { rank: { type: "score", score: value, probabilities, confidence: 0.48 } } });
   // Live TypeSafe reply: mean 1.66 reported as 1.65 after rounding.
   assert.equal((await askJev(reply(1.65), score)).answer.rank.score, 1.65);
-  assert.equal((await askJev(reply(1), score)).ok, true);
-  rejected(await askJev(reply(0.5), score), "invalid_distribution", /does not match the distribution mean/);
-  rejected(await askJev(reply(1.6), score), "invalid_distribution", /does not match/);
+  // An integer must be the most likely level (2 here) or the mean, never just any level.
+  assert.equal((await askJev(reply(2), score)).answer.rank.score, 2);
+  rejected(await askJev(reply(1), score), "invalid_distribution", /neither the distribution mean nor its most likely level/);
+  rejected(await askJev(reply(0), score), "invalid_distribution", /neither/);
+  rejected(await askJev(reply(0.5), score), "invalid_distribution", /neither the distribution mean/);
+  rejected(await askJev(reply(1.6), score), "invalid_distribution", /neither/);
   rejected(await askJev(reply(2.01), score), "invalid_choice", /outside criteria levels/);
   rejected(await askJev(reply(-0.01), score), "invalid_choice", /outside criteria levels/);
 });
@@ -712,4 +715,41 @@ test("Cloudflare serves Clef on the same endpoint with a single-nested envelope"
   });
   assert.equal(body.model, "@cf/cloudflare/clef-flash");
   assert.deepEqual(body.input.questions.sev.criteria, ["None", "Minor", "Major", "Critical"]);
+});
+
+test("review fixes: noul consistency, refusal order, sibling cancellation, openrouterModel alias", async () => {
+  const env = { DISCERN_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" };
+  const run = (done) => withFetch(async () => Response.json({ ...openaiWire, answers: [done, openaiWire.answers[1], openaiWire.answers[2]] }), () => ask(openaiInput, { env }));
+  const noul = (yes, no, choice) => ({ type: "choice", name: "done", choice, probabilities: [{ value: true, probability: yes }, { value: false, probability: no }] });
+  assert.equal((await run(noul(0.3, 0.7, false))).answer.done.noul, 0.3);
+  rejected(await run(noul(0.9, 0.9, false)), "invalid_noul", /question done/); // does not sum to 1
+  rejected(await run(noul(0.9, 0.1, false)), "invalid_noul", /question done/); // choice contradicts the weights
+  rejected(await run(noul(0.9, 0.1, "true")), "invalid_noul", /question done/); // choice is not a boolean
+
+  // A refusal cannot mask a malformed question.
+  rejected(await askJev(carrier({ answers: { q: { type: "refusal" } } }), { ...input, questions: { q: "garbage" } }), "malformed_answer", /question q/);
+  rejected(await askJev(carrier({ answers: { ...answers, item: { type: "refusal" } } }), input), "refused", /question item/);
+
+  // When one chunk fails, the sibling chunk is aborted instead of retrying after ask() returns.
+  const many = Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`q${i}`, { type: "noul" }]));
+  let calls = 0;
+  let siblingAborted = false;
+  await withFetch(async (_url, init) => {
+    calls++;
+    if (JSON.parse(init.body).questions.length === 200) return new Response("{}", { status: 400 });
+    return new Promise((resolve, reject) => init.signal.addEventListener("abort", () => { siblingAborted = true; reject(init.signal.reason); }));
+  }, async () => rejected(await ask({ ...openaiInput, questions: many }, { env }), "request_failed", /HTTP 400/));
+  assert.equal(siblingAborted, true);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(calls, 2);
+  // A caller abort still surfaces as cancellation.
+  const controller = new AbortController();
+  controller.abort(new Error("caller-cancel"));
+  await withFetch(async (_url, init) => { throw init.signal.reason; }, async () => {
+    const result = await ask({ ...openaiInput, signal: controller.signal }, { env });
+    assert.equal(result.ok, false);
+  });
+
+  assert.equal(openrouterModel("jev-latest"), "~typesafe/jev-latest");
+  assert.equal(openrouterJevModel, openrouterModel);
 });
