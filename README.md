@@ -3,6 +3,10 @@
 [![CI](https://github.com/jkudish/discern-agent-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/jkudish/discern-agent-tools/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+<p align="center">
+  <img src=".github/discern-agent-tools-banner.png" alt="discern-agent-tools — One validated ask() across judgment providers. Runs on TypeSafe's Jev or OpenAI Decisions." />
+</p>
+
 Multi-provider judgment transport with fail-closed validation, used by [Discern Browser](https://github.com/jkudish/discern-browser) and [Discern MCP](https://github.com/jkudish/discern-mcp). It sends typed questions to TypeSafe's Jev model (directly or through OpenRouter, Cloudflare, or Vercel) or to OpenAI's Decisions API.
 
 Formerly `@jkudish/jev-agent-tools`; see [Migrating from jev-agent-tools](#migrating-from-jev-agent-tools).
