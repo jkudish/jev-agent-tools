@@ -1,11 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 (unreleased)
 
-- OpenAI Decisions transport (spike, public beta API): `JEV_PROVIDER=openai` with `JEV_OPENAI_API_KEY` or `OPENAI_API_KEY`, optional `JEV_OPENAI_BASE_URL`. Explicit-only: never auto-detected. `jev-latest` maps to `gpt-6-luna`; other model names pass through. Each noul is sent as a true/false choice with its criteria as option descriptions, state is sent as labeled pretty-printed JSON, and requests above 200 questions are split into concurrent chunks.
+Renamed from `@jkudish/jev-agent-tools` to `@jkudish/discern-agent-tools`. See the README's migration section.
+
+- Rename: the package, the `Discern*` type names (`Jev*` kept as deprecated aliases), `DISCERN_*` environment variables, and `Discern provider` error messages. Legacy `JEV_*` variables keep working through 1.x; a `JEV_`/`DISCERN_` pair with different values is a configuration error. New `normalizeDiscernEnv()` export. An empty `DISCERN_PROVIDER` now means `auto`. OpenRouter attribution title is `discern`.
+- OpenAI Decisions transport (public beta API): `DISCERN_PROVIDER=openai` with `DISCERN_OPENAI_API_KEY` or `OPENAI_API_KEY`, optional `DISCERN_OPENAI_BASE_URL`. Never auto-detected. `jev-latest` maps to `gpt-6-luna`. Nouls are sent as true/false choices carrying their criteria, state as labeled pretty-printed JSON, and requests above 200 questions are split into concurrent chunks.
 - Score answers may be fractional. A non-integer score is accepted when it matches the probability-weighted mean of its distribution within two-decimal rounding; integer level scores are unchanged. Live TypeSafe score answers (for example 1.65) were previously rejected.
 - New rejection code `refused` when a carrier declines to answer a question.
-- TypeSafe and OpenAI share one retry helper; TypeSafe behavior and messages are unchanged.
+- TypeSafe and OpenAI share one retry helper; TypeSafe behavior is unchanged.
 
 ## 0.2.0
 
