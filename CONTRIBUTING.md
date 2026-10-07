@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for considering a contribution. This is a small package with a narrow scope: pick a carrier, send one judgment request, validate the answer. The consumers (jev-browser, jev-mcp) own everything above the wire.
+Thanks for considering a contribution. This is a small package with a narrow scope: pick a carrier, send one judgment request, validate the answer. The consumers (discern-browser, discern-mcp) own everything above the wire.
 
 ## Development
 
@@ -16,10 +16,10 @@ Node.js 22 or newer. TypeScript, ESM; no runtime dependencies.
 
 ```bash
 npm test            # hermetic tests, offline
-npm run test:live   # one real TypeSafe judgment, requires TYPESAFE_API_KEY
+npm run test:live   # one real judgment per configured carrier: TYPESAFE_API_KEY, OPENAI_API_KEY
 ```
 
-The hermetic suite stubs every endpoint and runs everywhere, including CI. The live smoke runs only when a `TYPESAFE_API_KEY` is configured. Both must pass before a pull request can merge. If you add behavior, add the test that would have caught its absence.
+The hermetic suite stubs every endpoint and runs everywhere, including CI. Each live smoke runs only when its key is configured. Both must pass before a pull request can merge. If you add behavior, add the test that would have caught its absence.
 
 ## Pull requests
 
@@ -27,6 +27,7 @@ The hermetic suite stubs every endpoint and runs everywhere, including CI. The l
 - New carriers follow the [add-a-provider guide](README.md#adding-a-provider). Open an issue first so we can agree on whether it belongs in the built-ins; smaller carriers are better as third-party driver packages we link from the README.
 - Error messages are fixed strings. Never include response bodies or credentials.
 - Keep `ask()` non-throwing. Rejections are typed results.
+- New environment variables use the `DISCERN_` prefix. Read them after `normalizeDiscernEnv`, never `process.env.JEV_*` directly; legacy `JEV_` names are aliases until 2.0.
 
 ## Notes
 
