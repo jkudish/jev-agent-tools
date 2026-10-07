@@ -70,6 +70,13 @@ export interface AskConfig extends TransportOptions {
   transport?: DiscernTransport;
   /** Whole-request deadline in milliseconds, covering every attempt. Default 60000. */
   timeoutMs?: number;
+  /**
+   * Called with the transport's raw, unvalidated reply just before validation.
+   * For callers that judge each answer on their own (discern-mcp reports one
+   * bad answer as one invalid judgment instead of failing the call). Treat the
+   * reply as untrusted input.
+   */
+  onReply?: (reply: DiscernTransportReply) => void;
 }
 
 export const DEFAULT_TIMEOUT_MS = 60_000;
@@ -183,6 +190,11 @@ export async function ask(input: DiscernTransportInput, config: AskConfig = {}):
     const message = read(error, "message");
     const reason = builtin && !input.signal.aborted && typeof message === "string" && BUILTIN_LABELS.test(message) ? ` (${message})` : "";
     return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed${reason}` };
+  }
+  try {
+    config.onReply?.(reply);
+  } catch {
+    // An observer must not break the non-throwing contract.
   }
   const fail = (id: string, code: RejectionCode, reason: string): AskResult => ({ ok: false, code, message: `Discern provider ${provider} question ${id}: ${reason}` });
   if (!record(input.questions)) return fail("<response>", "invalid_criteria", "questions must be an object");

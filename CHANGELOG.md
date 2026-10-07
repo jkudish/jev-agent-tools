@@ -14,6 +14,7 @@ Renamed from `@jkudish/jev-agent-tools` to `@jkudish/discern-agent-tools`. See t
 - Carriers moved here from discern-mcp: the `compatible` System One endpoint (`DISCERN_API_KEY` + `DISCERN_API_BASE_URL`, auto-selected only when nothing else is configured), `DISCERN_OPENROUTER_BASE_URL`, `DISCERN_CLOUDFLARE_BASE_URL`, and OpenRouter's allow-listed `max_tokens_exceeded` error code.
 - Neutral model alias `latest`: each carrier's current default model (Jev, or `gpt-6-luna` on OpenAI). `jev-latest` keeps working.
 - A malformed usage block is now `invalid_usage` on every carrier, not `request_failed`. Fixed built-in error messages (for example an oversized or unparseable response) are kept in `request_failed` messages.
+- `config.onReply(reply)`: observe the raw reply before validation without wrapping the transport, so built-in diagnostics are kept.
 - `JEV_` aliasing covers only the variables in the new `DISCERN_ENV_NAMES` export; `normalizeDiscernEnv(env, names)` accepts a consumer's list.
 - New rejection code `refused` when a carrier declines to answer a question.
 - TypeSafe and OpenAI share one retry helper; TypeSafe behavior is unchanged.
