@@ -537,7 +537,7 @@ const openaiInput = {
 const openaiWire = {
   model: "gpt-6-luna",
   answers: [
-    { type: "predicate", name: "done", probability: 0.3 },
+    { type: "choice", name: "done", choice: false, probabilities: [{ value: true, probability: 0.3 }, { value: false, probability: 0.7 }], confidence: 0.4 },
     { type: "choice", name: "route", choice: "technical", probabilities: [{ value: "billing", probability: 0.1 }, { value: "technical", probability: 0.9 }], confidence: 0.8 },
     { type: "score", name: "severity", score: 1.21, probabilities: [{ value: 0, label: "0", probability: 0.02 }, { value: 1, label: "1", probability: 0.75 }, { value: 2, label: "2", probability: 0.23 }], confidence: 0.63 },
   ],
@@ -576,9 +576,9 @@ test("OpenAI translates Jev questions and answers through the shared validator",
   assert.equal(requests[0].init.headers.Authorization, "Bearer high-secret");
   assert.deepEqual(JSON.parse(requests[0].init.body), {
     model: "gpt-6-luna",
-    input: '{"title":"Export fails in Safari"}',
+    input: 'State (JSON):\n{\n  "title": "Export fails in Safari"\n}',
     questions: [
-      { type: "predicate", name: "done", instructions: "The goal is achieved\nAnswer true when: Page shows the result\nAnswer false when: Not yet" },
+      { type: "choice", name: "done", instructions: "The goal is achieved", choices: [{ value: true, description: "Page shows the result" }, { value: false, description: "Not yet" }] },
       { type: "choice", name: "route", instructions: "Which team?", choices: [{ value: "billing", description: "Payments" }, { value: "technical" }] },
       { type: "score", name: "severity", instructions: "How severe?", levels: [{ label: "0", description: "Cosmetic" }, { label: "1" }, { label: "2", description: "Blocked" }] },
     ],
@@ -587,8 +587,8 @@ test("OpenAI translates Jev questions and answers through the shared validator",
   await withFetch(async (_url, init) => {
     const sent = JSON.parse(init.body).questions;
     assert.equal(sent[0].instructions, '{"task":"Which class?","item":{"id":"i0","text":"Charged twice"}}');
-    assert.equal(sent[1].instructions, "");
-    return Response.json({ model: "gpt-6-luna", answers: [{ type: "choice", name: "i0", choice: "a", probabilities: [{ value: "a", probability: 1 }, { value: "b", probability: 0 }] }, { type: "predicate", name: "bare", probability: 0.5 }] });
+    assert.deepEqual(sent[1], { type: "choice", name: "bare", instructions: "", choices: [{ value: true }, { value: false }] });
+    return Response.json({ model: "gpt-6-luna", answers: [{ type: "choice", name: "i0", choice: "a", probabilities: [{ value: "a", probability: 1 }, { value: "b", probability: 0 }] }, { type: "choice", name: "bare", choice: true, probabilities: [{ value: true, probability: 0.5 }, { value: false, probability: 0.5 }] }] });
   }, async () => assert.equal((await ask({ ...openaiInput, questions: {
     i0: { type: "choice", instructions: { task: "Which class?", item: { id: "i0", text: "Charged twice" } }, criteria: { a: null, b: null } },
     bare: { type: "noul", instructions: null },
@@ -607,6 +607,10 @@ test("OpenAI refusals, duplicate names, and typed choice values fail closed", as
   rejected(await run([...openaiWire.answers, openaiWire.answers[0]]), "malformed_answer", /answers must be an object/);
   rejected(await run([openaiWire.answers[0], { ...openaiWire.answers[1], probabilities: [{ value: true, probability: 0.1 }, { value: "technical", probability: 0.9 }] }, openaiWire.answers[2]]), "invalid_distribution", /question route/);
   rejected(await run({ done: { type: "noul", noul: 0.3 } }), "malformed_answer", /answers must be an object/);
+  // A noul's boolean choice must be exactly {true, false}; string look-alikes or a missing side fail closed.
+  for (const probabilities of [[{ value: "true", probability: 0.3 }, { value: "false", probability: 0.7 }], [{ value: true, probability: 1 }], [{ value: true, probability: 0.3 }, { value: false, probability: 0.7 }, { value: "maybe", probability: 0 }]]) {
+    rejected(await run([{ ...openaiWire.answers[0], probabilities }, openaiWire.answers[1], openaiWire.answers[2]]), "invalid_noul", /question done/);
+  }
   let sent = 0;
   await withFetch(async () => { sent++; return Response.json(openaiWire); }, async () => {
     rejected(await ask({ ...openaiInput, questions: { odd: { type: "rank" } } }, { env }), "request_failed", /provider openai: request failed$/);
@@ -620,7 +624,7 @@ test("OpenAI refusals, duplicate names, and typed choice values fail closed", as
 test("OpenAI splits requests above 200 questions and merges answers and usage", async () => {
   const many = Object.fromEntries(Array.from({ length: 250 }, (_, i) => [`rel_${i}`, { type: "noul", instructions: `Is ${i} relevant?` }]));
   const sizes = [];
-  const reply = (body, usage) => Response.json({ model: "gpt-6-luna", usage, answers: body.questions.map((q) => ({ type: "predicate", name: q.name, probability: 0.5 })) });
+  const reply = (body, usage) => Response.json({ model: "gpt-6-luna", usage, answers: body.questions.map((q) => ({ type: "choice", name: q.name, choice: true, probabilities: [{ value: true, probability: 0.5 }, { value: false, probability: 0.5 }] })) });
   const env = { JEV_PROVIDER: "openai", OPENAI_API_KEY: "low-secret" };
   await withFetch(async (_url, init) => {
     const body = JSON.parse(init.body);

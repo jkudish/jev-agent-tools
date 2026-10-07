@@ -48,7 +48,7 @@ Auto-selection tries them in this order:
 - **OpenAI Decisions** (explicit only: `JEV_PROVIDER=openai`, with `JEV_OPENAI_API_KEY` preferred over `OPENAI_API_KEY`, optional `JEV_OPENAI_BASE_URL`): sends questions to [OpenAI's Decisions API](https://developers.openai.com/api/docs/guides/decisions) and maps `jev-latest` to `gpt-6-luna`.
   - This is not Jev. It is a different model with its own calibration, so thresholds tuned on Jev need re-checking against your own labeled examples.
   - It is never auto-detected, because `OPENAI_API_KEY` is common in environments that never chose it.
-  - Noul true/false descriptions are folded into the predicate instructions. Limits: 255 choices, 10 score levels; requests above 200 questions are split into concurrent chunks.
+  - Each noul is sent as a two-option choice over `true` and `false`, with its criteria as option descriptions; the noul is the weight on `true`. State is sent pretty-printed under a `State (JSON):` label, which costs about 35% more input tokens than compact JSON but agreed with Jev more often on captured requests. Limits: 255 choices, 10 score levels; requests above 200 questions are split into concurrent chunks.
   - The API is in public beta and may change before GA.
 
 Set `JEV_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `openai`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one.
