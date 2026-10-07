@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src=".github/discern-agent-tools-banner.png" alt="discern-agent-tools — One validated ask() across judgment providers. Runs on TypeSafe's Jev, Cloudflare's Clef, or OpenAI Decisions." />
+  <img src=".github/discern-agent-tools-banner.png" alt="discern-agent-tools: one validated ask() across judgment providers. Runs on TypeSafe's Jev, Cloudflare's Clef, or OpenAI Decisions." />
 </p>
 
 Multi-provider judgment transport with fail-closed validation, used by [Discern Browser](https://github.com/jkudish/discern-browser) and [Discern MCP](https://github.com/jkudish/discern-mcp). It sends typed questions to TypeSafe's Jev model (directly or through OpenRouter, Cloudflare, or Vercel) or to OpenAI's Decisions API.
@@ -122,7 +122,7 @@ Published a driver package? Open an issue or pull request on any of the three re
 
 ### Adding a built-in carrier
 
-The built-ins are a fixed, maintainer-curated set (TypeSafe, OpenRouter, Cloudflare, Vercel, compatible endpoints, OpenAI). New built-ins are generally not accepted unless sufficient demand is shown — open an issue first. The mechanics, for when one is accepted:
+The built-ins are a fixed, maintainer-curated set (TypeSafe, OpenRouter, Cloudflare, Vercel, compatible endpoints, OpenAI). New built-ins are generally not accepted unless sufficient demand is shown; open an issue first. The mechanics, for when one is accepted:
 
 - Add `src/transports/<name>.ts` exporting a driver: `name`, `isConfigured(env)`, `assertConfigured(env)`, and `create(env)` returning a `DiscernTransport`.
 - Register it in the `drivers` array in `src/provider.ts`, and add its name to the `BuiltinDriver` name union. Pick its auto-detection position deliberately; the order is the documented precedence.
