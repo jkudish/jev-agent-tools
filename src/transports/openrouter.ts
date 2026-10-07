@@ -1,7 +1,7 @@
 import type { BuiltinDriver } from "../provider.js";
 
-const TITLE = "jev-browser";
-const REFERER = "https://github.com/jkudish/jev-browser";
+const TITLE = "discern";
+const REFERER = "https://github.com/jkudish/discern-agent-tools";
 const LATEST = "~typesafe/jev-latest";
 
 /** Map a Jev model name to OpenRouter's Decisions API model ID. */

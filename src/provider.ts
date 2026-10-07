@@ -3,68 +3,85 @@ import { openrouter } from "./transports/openrouter.js";
 import { cloudflare } from "./transports/cloudflare.js";
 import { vercel } from "./transports/vercel.js";
 import { openai } from "./transports/openai.js";
+import { normalizeDiscernEnv } from "./env.js";
 
-export interface JevTransportInput {
+export interface DiscernTransportInput {
   state: unknown;
   questions: Record<string, unknown>;
   model: string;
   signal: AbortSignal;
 }
 
-export interface JevTransportReply {
+export interface DiscernTransportReply {
   answers: unknown;
   usage: { input_tokens: number; output_tokens: number };
   model: string;
 }
 
-export interface JevTransport {
+export interface DiscernTransport {
   readonly name: string;
-  ask(input: JevTransportInput): Promise<JevTransportReply>;
+  ask(input: DiscernTransportInput): Promise<DiscernTransportReply>;
 }
 
 export interface BuiltinDriver {
   readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel" | "openai";
-  /** Never auto-detected; selected only by JEV_PROVIDER. */
+  /** Never auto-detected; selected only by DISCERN_PROVIDER. */
   readonly explicitOnly?: true;
   isConfigured(env: Env): boolean;
   assertConfigured(env: Env): void;
-  create(env: Env): JevTransport;
+  create(env: Env): DiscernTransport;
 }
 
 export type Env = Record<string, string | undefined>;
 
-export type JevAnswer =
+/** @deprecated Use DiscernTransportInput. Removed in 2.0. */
+export type JevTransportInput = DiscernTransportInput;
+/** @deprecated Use DiscernTransportReply. Removed in 2.0. */
+export type JevTransportReply = DiscernTransportReply;
+/** @deprecated Use DiscernTransport. Removed in 2.0. */
+export type JevTransport = DiscernTransport;
+
+export type DiscernAnswer =
   | { type: "noul"; noul: number }
   | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number | null }
   // Score is the probability-weighted mean of level indices (it can fall
   // between levels); some carriers report an integer level instead.
   | { type: "score"; score: number; probabilities: Record<string, number>; confidence: number | null };
 
+/** @deprecated Use DiscernAnswer. Removed in 2.0. */
+export type JevAnswer = DiscernAnswer;
+
 export type RejectionCode = "request_failed" | "rate_limited" | "unavailable" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "refused" | "invalid_confidence" | "invalid_usage" | "invalid_model";
 
 export type AskResult =
-  | { ok: true; answer: Record<string, JevAnswer>; usage: JevTransportReply["usage"]; model: string; provider: string }
+  | { ok: true; answer: Record<string, DiscernAnswer>; usage: DiscernTransportReply["usage"]; model: string; provider: string }
   | { ok: false; code: RejectionCode; message: string };
 
-export interface AskConfig { env?: Env; transport?: JevTransport }
+export interface AskConfig { env?: Env; transport?: DiscernTransport }
 
 const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel, openai];
 
-export function resolveTransport(env: Env = process.env): JevTransport {
-  const explicit = (env.JEV_PROVIDER ?? "auto").toLowerCase();
+/**
+ * Pick a carrier from the environment. Legacy JEV_<X> variables are read as
+ * DISCERN_<X> through 1.x (see normalizeDiscernEnv); drivers see only the
+ * DISCERN_ names.
+ */
+export function resolveTransport(input: Env = process.env): DiscernTransport {
+  const { env } = normalizeDiscernEnv(input);
+  const explicit = (env.DISCERN_PROVIDER || "auto").toLowerCase();
   if (explicit !== "auto") {
     const driver = drivers.find((candidate) => candidate.name === explicit);
-    if (!driver) throw new Error("Unknown JEV_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, openai, or auto.");
+    if (!driver) throw new Error("Unknown DISCERN_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, openai, or auto.");
     try {
       driver.assertConfigured(env);
     } catch (error) {
-      throw new Error(`JEV_PROVIDER=${driver.name} but ${(error as Error).message}`);
+      throw new Error(`DISCERN_PROVIDER=${driver.name} but ${(error as Error).message}`);
     }
     return driver.create(env);
   }
   const driver = drivers.find((candidate) => !candidate.explicitOnly && candidate.isConfigured(env));
   if (!driver) {
-    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY found. Set one, or JEV_PROVIDER to choose explicitly (JEV_PROVIDER=openai uses JEV_OPENAI_API_KEY or OPENAI_API_KEY).");
+    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or DISCERN_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY found. Set one, or DISCERN_PROVIDER to choose explicitly (DISCERN_PROVIDER=openai uses DISCERN_OPENAI_API_KEY or OPENAI_API_KEY).");
   }
   return driver.create(env);
 }
@@ -102,19 +119,19 @@ function distribution(value: unknown, keys: string[]): { ok: true; probabilities
   return { ok: true, probabilities: Object.fromEntries(entries) };
 }
 
-export async function ask(input: JevTransportInput, config: AskConfig = {}): Promise<AskResult> {
-  let transport: JevTransport;
+export async function ask(input: DiscernTransportInput, config: AskConfig = {}): Promise<AskResult> {
+  let transport: DiscernTransport;
   try {
     transport = config.transport ?? resolveTransport(config.env);
   } catch (error) {
     // Registry errors are fixed strings; never echo arbitrary driver exceptions.
-    const message = error instanceof Error && /^(Unknown JEV_PROVIDER|No TYPESAFE_API_KEY|JEV_PROVIDER=|JEV_VERCEL_ZERO_DATA_RETENTION must)/.test(error.message)
-      ? error.message : "Jev provider configuration failed";
+    const message = error instanceof Error && /^(Unknown DISCERN_PROVIDER|No TYPESAFE_API_KEY|DISCERN_PROVIDER=|DISCERN_VERCEL_ZERO_DATA_RETENTION must|DISCERN_[A-Z0-9_]+ and JEV_[A-Z0-9_]+ are both set)/.test(error.message)
+      ? error.message : "Discern provider configuration failed";
     return { ok: false, code: "configuration_error", message };
   }
   // Injected transport names are untrusted and never included in error text.
   const provider = typeof transport.name === "string" && /^(typesafe|openrouter|cloudflare|vercel|openai|fixture)$/.test(transport.name) ? transport.name : "unknown";
-  let reply: JevTransportReply;
+  let reply: DiscernTransportReply;
   try {
     reply = await transport.ask(input);
   } catch (error) {
@@ -129,19 +146,19 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
       status = undefined;
     }
     const httpStatus = typeof status === "number" && Number.isInteger(status) && status >= 100 && status < 600 ? status : undefined;
-    if (httpStatus === 429) return { ok: false, code: "rate_limited", message: `Jev provider ${provider}: rate limited (HTTP 429)` };
-    if (httpStatus !== undefined && httpStatus >= 500) return { ok: false, code: "unavailable", message: `Jev provider ${provider}: unavailable (HTTP ${httpStatus})` };
-    if (httpStatus !== undefined) return { ok: false, code: "request_failed", message: `Jev provider ${provider}: request failed (HTTP ${httpStatus})` };
-    return { ok: false, code: "request_failed", message: `Jev provider ${provider}: request failed` };
+    if (httpStatus === 429) return { ok: false, code: "rate_limited", message: `Discern provider ${provider}: rate limited (HTTP 429)` };
+    if (httpStatus !== undefined && httpStatus >= 500) return { ok: false, code: "unavailable", message: `Discern provider ${provider}: unavailable (HTTP ${httpStatus})` };
+    if (httpStatus !== undefined) return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed (HTTP ${httpStatus})` };
+    return { ok: false, code: "request_failed", message: `Discern provider ${provider}: request failed` };
   }
-  const fail = (id: string, code: RejectionCode, reason: string): AskResult => ({ ok: false, code, message: `Jev provider ${provider} question ${id}: ${reason}` });
+  const fail = (id: string, code: RejectionCode, reason: string): AskResult => ({ ok: false, code, message: `Discern provider ${provider} question ${id}: ${reason}` });
   if (!record(input.questions)) return fail("<response>", "invalid_criteria", "questions must be an object");
   if (!record(reply) || !record(reply.answers)) return fail("<response>", "malformed_answer", "answers must be an object");
   const answers = reply.answers as Record<string, unknown>;
   const ids = Object.keys(input.questions);
   for (const id of ids) if (!Object.hasOwn(answers, id)) return fail(id, "answer_id_mismatch", "missing answer");
   if (Object.keys(answers).length !== ids.length) return fail("<response>", "answer_id_mismatch", "unexpected answer ID");
-  const validated: [string, JevAnswer][] = [];
+  const validated: [string, DiscernAnswer][] = [];
   for (const id of ids) {
     const question = input.questions[id];
     const answer = answers[id];
@@ -186,5 +203,5 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
     return fail("<response>", "invalid_usage", "usage counters must be non-negative safe integers");
   }
   if (typeof reply.model !== "string" || !reply.model.trim()) return fail("<response>", "invalid_model", "effective model must be nonempty");
-  return { ok: true, answer: Object.fromEntries(validated), usage: reply.usage as JevTransportReply["usage"], provider, model: reply.model as string };
+  return { ok: true, answer: Object.fromEntries(validated), usage: reply.usage as DiscernTransportReply["usage"], provider, model: reply.model as string };
 }
