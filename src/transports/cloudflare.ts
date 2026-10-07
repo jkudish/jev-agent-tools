@@ -1,5 +1,20 @@
 import type { BuiltinDriver } from "../provider.js";
 
+// Cloudflare's own Clef decision models speak the same wire format as Jev and
+// run on the same Workers AI endpoint: https://blog.cloudflare.com/clef-decision-models/
+const CLEF_MODELS = new Set(["clef", "clef-flash"]);
+
+/**
+ * Map a model name to a Workers AI model id. `clef` and `clef-flash` name
+ * Cloudflare's Clef models; any `@cf/` id passes through; everything else is a
+ * TypeSafe Jev name, where `jev-latest` maps to Cloudflare's single `typesafe/jev` alias.
+ */
+export function cloudflareModel(model: string): string {
+  if (CLEF_MODELS.has(model)) return `@cf/cloudflare/${model}`;
+  if (model.startsWith("@cf/") || model.startsWith("typesafe/")) return model;
+  return `typesafe/${model === "jev-latest" ? "jev" : model}`;
+}
+
 export const cloudflare: BuiltinDriver = {
   name: "cloudflare",
   isConfigured: (env) => Boolean((env.DISCERN_CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_API_TOKEN) && env.CLOUDFLARE_ACCOUNT_ID),
@@ -13,7 +28,7 @@ export const cloudflare: BuiltinDriver = {
     return {
       name: this.name,
       async ask({ state, questions, model, signal }) {
-        const slug = model.startsWith("typesafe/") ? model : `typesafe/${model === "jev-latest" ? "jev" : model}`;
+        const slug = cloudflareModel(model);
         const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/ai/run`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -37,7 +52,8 @@ export const cloudflare: BuiltinDriver = {
         }
         if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error(`Cloudflare AI run HTTP ${response.status} (invalid envelope; ${bytes} response bytes)`);
         if (body.success === false) throw new Error(`Cloudflare AI run HTTP ${response.status} (API unsuccessful; ${bytes} response bytes)`);
-        // The v4 envelope double-nests the model output under result.result.
+        // Jev double-nests the model output under result.result; Clef returns it
+        // directly under result. Both reach the same shared validation.
         const outer = body.result;
         if (outer && typeof outer.state === "string" && outer.state !== "Completed") {
           throw new Error(`Cloudflare AI run HTTP ${response.status} (non-Completed state; ${bytes} response bytes)`);

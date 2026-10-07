@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ask, normalizeDiscernEnv, openaiDecisionsModel, openrouterJevModel, resolveTransport } from "../dist/index.js";
+import { ask, cloudflareModel, normalizeDiscernEnv, openaiDecisionsModel, openrouterJevModel, resolveTransport } from "../dist/index.js";
 import { typesafe } from "../dist/transports/typesafe.js";
 import { openrouter } from "../dist/transports/openrouter.js";
 import { cloudflare } from "../dist/transports/cloudflare.js";
@@ -689,4 +689,27 @@ test("legacy JEV_ variables alias DISCERN_ ones through 1.x, and conflicts fail 
   rejected(await ask(input, { env: { JEV_PROVIDER: "typo" } }), "configuration_error", /Unknown DISCERN_PROVIDER/);
   // An empty DISCERN_PROVIDER means auto, not an unknown provider.
   assert.equal(resolveTransport({ DISCERN_PROVIDER: "", TYPESAFE_API_KEY: "ts-secret" }).name, "typesafe");
+});
+
+test("Cloudflare serves Clef on the same endpoint with a single-nested envelope", async () => {
+  assert.equal(cloudflareModel("clef"), "@cf/cloudflare/clef");
+  assert.equal(cloudflareModel("clef-flash"), "@cf/cloudflare/clef-flash");
+  assert.equal(cloudflareModel("@cf/cloudflare/clef-2"), "@cf/cloudflare/clef-2");
+  assert.equal(cloudflareModel("jev-latest"), "typesafe/jev");
+  assert.equal(cloudflareModel("jev-1.13"), "typesafe/jev-1.13");
+  assert.equal(cloudflareModel("clefx"), "typesafe/clefx");
+  const env = { CLOUDFLARE_API_TOKEN: "low-secret", CLOUDFLARE_ACCOUNT_ID: "account" };
+  // Live Clef reply shape (2026-10-07): answers directly under result, fractional score, legend, 4-decimal probabilities.
+  const scoreQ = { ...input, model: "clef-flash", questions: { ...questions, sev: { type: "score", criteria: ["None", "Minor", "Major", "Critical"] } } };
+  const clefAnswers = { ...answers, sev: { type: "score", score: 2.72, legend: { 0: "None", 1: "Minor", 2: "Major", 3: "Critical" }, probabilities: { 0: 0.015, 1: 0.0143, 2: 0.2064, 3: 0.7643 }, confidence: 0.5029 } };
+  let body;
+  await withFetch(async (_url, init) => { body = JSON.parse(init.body); return Response.json({ success: true, result: { model: "clef-flash", answers: clefAnswers, usage: { input_tokens: 346, output_tokens: 0 } } }); }, async () => {
+    const result = await ask(scoreQ, { env: { ...env, DISCERN_PROVIDER: "cloudflare" } });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(result.model, "clef-flash");
+    assert.equal(result.answer.sev.score, 2.72);
+    assert.deepEqual(result.usage, { input_tokens: 346, output_tokens: 0 });
+  });
+  assert.equal(body.model, "@cf/cloudflare/clef-flash");
+  assert.deepEqual(body.input.questions.sev.criteria, ["None", "Minor", "Major", "Critical"]);
 });
