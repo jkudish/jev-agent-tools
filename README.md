@@ -46,6 +46,9 @@ Auto-selection tries them in this order:
 - **TypeSafe** (`TYPESAFE_API_KEY`, optional `TYPESAFE_BASE_URL`): direct; sends the model you supply, usually `jev-latest`.
 - **OpenRouter** (`OPENROUTER_API_KEY`, begins `sk-or-`): maps `jev-latest` to OpenRouter's moving `~typesafe/jev-latest` alias. Pin a version, such as `typesafe/jev-1.13`, for reproducible routing. Results report the snapshot OpenRouter returns.
 - **Cloudflare** (`DISCERN_CLOUDFLARE_API_TOKEN` preferred over `CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID`): maps `jev-latest` to `typesafe/jev`.
+  - The same carrier runs Cloudflare's own [Clef decision models](https://blog.cloudflare.com/clef-decision-models/): pass `clef` or `clef-flash` as the model (mapped to `@cf/cloudflare/clef` and `@cf/cloudflare/clef-flash`), or any `@cf/` model id unchanged. Clef uses the same request and answer format as Jev, so nothing is translated.
+  - Clef is not Jev. It is a different model with its own calibration, so thresholds tuned on Jev need re-checking. `clef-flash` is the low-latency variant; expect occasional multi-second cold starts.
+  - The token needs Workers AI access (Account → Workers AI → Read).
 - **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`, optional `DISCERN_VERCEL_ZERO_DATA_RETENTION`): selects `typesafe-ai/jev` unless given a `typesafe-ai/` model.
   - Set `DISCERN_VERCEL_ZERO_DATA_RETENTION=1` or `true` to request [Vercel's zero data retention (ZDR) routing](https://vercel.com/docs/ai-gateway/security-and-compliance/zdr) on every request.
   - Unset, empty, `0`, or `false` leaves the request body unchanged. Any other value is a configuration error before a request is sent.
