@@ -50,7 +50,7 @@ Set `JEV_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `auto
 
 ## Validation
 
-Every reply is checked before you see it. Validation requires exactly the requested answer IDs and criterion IDs, finite probabilities in [0,1] summing to within 0.01 of 1, and a selected Choice maximum within a 0.001 tie tolerance. Noul values must be in [0,1], confidence finite or null, usage counters non-negative safe integers, and the effective model nonempty. An invalid answer yields `ok: false` before any usage is credited, so a malformed response can never become a decision.
+Every reply is checked before you see it. Validation requires exactly the requested answer IDs and criterion IDs and finite probabilities in [0,1]. The probability sum may drift from 1 by 0.005 per nonzero option, with a 0.01 floor and 0.05 cap. A selected Choice may be at most 0.01 below the maximum; the reported choice and probabilities are preserved, not replaced or normalized. Both tolerances include a small floating-point epsilon. Noul values must be in [0,1], confidence finite or null, usage counters non-negative safe integers, and the effective model nonempty. An invalid answer yields `ok: false` before any usage is credited, so a malformed response can never become a decision.
 
 ## Adding a provider
 

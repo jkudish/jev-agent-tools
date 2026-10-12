@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Valid near-tie Jev choices are no longer rejected for a one-step probability discrepancy; the reported choice and probabilities are preserved. Fixes [#10](https://github.com/jkudish/jev-agent-tools/issues/10), reported by [@kittimzhe](https://github.com/kittimzhe).
+
 ## 0.2.0
 
 - OpenRouter: `jev-latest` uses OpenRouter's `~typesafe/jev-latest` alias, an explicit alias is no longer double-prefixed, and results report the returned snapshot. Explicit version pins are unchanged. Reported in [jev-mcp#55](https://github.com/jkudish/jev-mcp/issues/55).

@@ -89,8 +89,8 @@ function distribution(value: unknown, keys: string[]): { ok: true; probabilities
   // can be off by up to 0.005 and the drift grows with how many options carry
   // weight (a results page with 8 live options can legitimately sum to 0.98).
   // Permit that rounding drift (never less than one percent, never more than
-  // five, so garbage still fails) and a 0.001 selection tie, but not a
-  // different winner. The epsilon keeps an exact 1.01 from failing on IEEE-754.
+  // five, so garbage still fails). The epsilon keeps an exact 1.01 from
+  // failing on IEEE-754.
   const nonzero = entries.filter(([, probability]) => probability > 0).length;
   const tolerance = Math.min(MAX_SUM_DRIFT, Math.max(0.01, ROUNDING_STEP * nonzero)) + 1e-9;
   if (Math.abs(sum - 1) > tolerance) return { ok: false, reason: "distribution must sum to approximately 1" };
@@ -157,7 +157,9 @@ export async function ask(input: JevTransportInput, config: AskConfig = {}): Pro
     if (confidence !== null && (typeof confidence !== "number" || !Number.isFinite(confidence))) return fail(id, "invalid_confidence", "confidence must be finite or null");
     if (question.type === "choice") {
       if (typeof answer.choice !== "string" || !keys.includes(answer.choice)) return fail(id, "invalid_choice", "choice is outside criteria");
-      if (probabilities[answer.choice as string] + 0.001 < Math.max(...Object.values(probabilities))) return fail(id, "invalid_choice", "choice is not a distribution maximum");
+      // Upstream near-ties can differ by one probability step; preserve the
+      // reported choice rather than substituting an argmax (issue #10).
+      if (Math.max(...Object.values(probabilities)) - probabilities[answer.choice as string] > 0.01 + 1e-9) return fail(id, "invalid_choice", "choice is not a distribution maximum");
       validated.push([id, { type: "choice", choice: answer.choice as string, probabilities, confidence: confidence as number | null }]);
     } else if (question.type === "score") {
       if (typeof answer.score !== "number" || !Number.isInteger(answer.score) || !keys.includes(String(answer.score))) return fail(id, "invalid_choice", "score is outside criteria levels");

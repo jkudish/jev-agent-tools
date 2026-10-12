@@ -99,6 +99,27 @@ test("sum tolerance scales with two-decimal rounding across live options, but st
   rejected(await askJev(reply(Array.from({ length: 20 }, (_, i) => (i === 0 ? 0.13 : 0.05))), wide), "invalid_distribution", /approximately 1/);
 });
 
+test("choice accepts one-step near-ties without replacing the reported choice", async () => {
+  const nearTie = { ...input, questions: { pick: { type: "choice", criteria: { a: "A", b: "B", c: "C" } } } };
+  for (const [a, b, c, accepted] of [
+    [0.40, 0.39, 0.21, true],
+    [0.50, 0.49, 0.01, true],
+    [0.40, 0.40, 0.20, true],
+    [0.40, 0.38, 0.22, false],
+    [0.40, 0.389, 0.211, false],
+  ]) {
+    const probabilities = { a, b, c };
+    const result = await askJev(carrier({ answers: { pick: { type: "choice", choice: "b", probabilities } } }), nearTie);
+    if (accepted) {
+      assert.equal(result.ok, true);
+      assert.equal(result.answer.pick.choice, "b");
+      assert.deepEqual(result.answer.pick.probabilities, probabilities);
+    } else {
+      rejected(result, "invalid_choice", /not a distribution maximum/);
+    }
+  }
+});
+
 test("facade validates the complete answer contract before usage can be credited", async () => {
   const good = await askJev(carrier(), input);
   assert.equal(good.ok, true);
