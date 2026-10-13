@@ -4,8 +4,9 @@ import { cloudflare } from "./transports/cloudflare.js";
 import { vercel } from "./transports/vercel.js";
 import { openai } from "./transports/openai.js";
 import { compatible } from "./transports/compatible.js";
+import { subq } from "./transports/subq.js";
 import { normalizeDiscernEnv } from "./env.js";
-import { CarrierFailure, CarrierHttpError } from "./transports/http.js";
+import { CarrierFailure, CarrierHttpError, CarrierRejection } from "./transports/http.js";
 
 export interface DiscernTransportInput {
   state: unknown;
@@ -31,7 +32,7 @@ export interface TransportOptions {
 }
 
 export interface BuiltinDriver {
-  readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel" | "openai" | "compatible";
+  readonly name: "typesafe" | "openrouter" | "cloudflare" | "vercel" | "openai" | "compatible" | "subq";
   /** Never auto-detected; selected only by DISCERN_PROVIDER. */
   readonly explicitOnly?: true;
   isConfigured(env: Env): boolean;
@@ -86,7 +87,7 @@ const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 // Auto-selection order; the generic compatible endpoint comes last, so it is
 // chosen only when no named carrier is configured.
-const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel, compatible, openai];
+const drivers: readonly BuiltinDriver[] = [typesafe, openrouter, cloudflare, vercel, compatible, openai, subq];
 const DRIVER_NAMES = drivers.map((driver) => driver.name);
 
 /**
@@ -99,7 +100,7 @@ export function resolveTransport(input: Env = process.env, options: TransportOpt
   const explicit = (env.DISCERN_PROVIDER || "auto").toLowerCase();
   if (explicit !== "auto") {
     const driver = drivers.find((candidate) => candidate.name === explicit);
-    if (!driver) throw new Error("Unknown DISCERN_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, compatible, openai, or auto.");
+    if (!driver) throw new Error("Unknown DISCERN_PROVIDER; choose typesafe, openrouter, cloudflare, vercel, compatible, openai, subq, or auto.");
     try {
       driver.assertConfigured(env);
     } catch (error) {
@@ -109,7 +110,7 @@ export function resolveTransport(input: Env = process.env, options: TransportOpt
   }
   const driver = drivers.find((candidate) => !candidate.explicitOnly && candidate.isConfigured(env));
   if (!driver) {
-    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or DISCERN_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY, or DISCERN_API_KEY + DISCERN_API_BASE_URL found. Set one, or DISCERN_PROVIDER to choose explicitly (DISCERN_PROVIDER=openai uses DISCERN_OPENAI_API_KEY or OPENAI_API_KEY).");
+    throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token (CLOUDFLARE_API_TOKEN or DISCERN_CLOUDFLARE_API_TOKEN) + CLOUDFLARE_ACCOUNT_ID, or AI_GATEWAY_API_KEY, or DISCERN_API_KEY + DISCERN_API_BASE_URL found. Set one, or DISCERN_PROVIDER to choose explicitly (DISCERN_PROVIDER=openai uses DISCERN_OPENAI_API_KEY or OPENAI_API_KEY; DISCERN_PROVIDER=subq uses DISCERN_SUBQ_API_KEY or SUBQ_API_KEY).");
   }
   return driver.create(env, options);
 }
@@ -188,6 +189,7 @@ export async function ask(input: DiscernTransportInput, config: AskConfig = {}):
     reply = await transport.ask({ ...input, signal: controller.signal });
   } catch (error) {
     if (timedOut && !caller?.aborted) return { ok: false, code: "timeout", message: `Discern provider ${provider}: no answer within the ${timeoutMs}ms deadline` };
+    if (error instanceof CarrierRejection) return error.result;
     // HTTP failures carry a numeric `status`. Only built-in carriers
     // (CarrierHttpError, constructible only inside this package) add an
     // allow-listed `detail` code or a fixed message; never a response body.
@@ -209,6 +211,11 @@ export async function ask(input: DiscernTransportInput, config: AskConfig = {}):
   } catch {
     // An observer must not break the non-throwing contract.
   }
+  return validateReply(input, reply, provider);
+}
+
+/** Shared validation, also used before a chunked carrier sends its next request. */
+export function validateReply(input: DiscernTransportInput, reply: DiscernTransportReply, provider: string): AskResult {
   const fail = (id: string, code: RejectionCode, reason: string): AskResult => ({ ok: false, code, message: `Discern provider ${provider} question ${id}: ${reason}` });
   if (!record(input.questions)) return fail("<response>", "invalid_criteria", "questions must be an object");
   if (!record(reply) || !record(reply.answers)) return fail("<response>", "malformed_answer", "answers must be an object");
