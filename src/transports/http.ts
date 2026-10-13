@@ -9,6 +9,8 @@
 // a paid call. Caller aborts and deadline expiry cut any backoff short and
 // never retry. Research and the original report: jkudish/jev-mcp#23 by oppih.
 
+import type { AskResult } from "../provider.js";
+
 export const DEFAULT_MAX_ATTEMPTS = 3;
 /** Total attempts per request, including the first, clamped to 1..6. */
 export const clampAttempts = (n: number | undefined): number =>
@@ -52,6 +54,13 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
  * package, so ask() may show them; errors from injected transports never are.
  */
 export class CarrierFailure extends Error {}
+
+/** A shared-validator rejection stops a chunked carrier before its next paid request. */
+export class CarrierRejection extends CarrierFailure {
+  constructor(readonly result: Extract<AskResult, { ok: false }>) {
+    super(result.message);
+  }
+}
 
 /** An HTTP failure: a fixed message, the numeric status, and optionally an allow-listed detail code. Never a response body. */
 export class CarrierHttpError extends CarrierFailure {

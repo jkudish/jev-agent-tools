@@ -12,6 +12,8 @@ export const DISCERN_ENV_NAMES: readonly string[] = Object.freeze([
   "PROVIDER",
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
+  "SUBQ_API_KEY",
+  "SUBQ_BASE_URL",
   "OPENROUTER_BASE_URL",
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_BASE_URL",

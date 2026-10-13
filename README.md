@@ -7,7 +7,7 @@
   <img src=".github/discern-agent-tools-banner.png" alt="discern-agent-tools: one validated ask() across judgment providers. Runs on TypeSafe's Jev, Cloudflare's Clef, or OpenAI Decisions." />
 </p>
 
-Multi-provider judgment transport with fail-closed validation, used by [Discern Browser](https://github.com/jkudish/discern-browser) and [Discern MCP](https://github.com/jkudish/discern-mcp). It sends typed questions to TypeSafe's Jev model (directly or through OpenRouter, Cloudflare, or Vercel) or to OpenAI's Decisions API.
+Multi-provider judgment transport with fail-closed validation, used by [Discern Browser](https://github.com/jkudish/discern-browser) and [Discern MCP](https://github.com/jkudish/discern-mcp). It sends typed questions to TypeSafe's Jev, Cloudflare's Clef, OpenAI Decisions, or SubQ Decisions.
 
 Formerly `@jkudish/jev-agent-tools`; see [Migrating from jev-agent-tools](#migrating-from-jev-agent-tools).
 
@@ -62,9 +62,15 @@ Auto-selection tries them in this order:
 
 - **Any System One-compatible endpoint** (`DISCERN_API_KEY` and `DISCERN_API_BASE_URL`, the full POST URL): sends `{ model, state, questions }` with a Bearer token. Auto-selected only when no other carrier is configured. `latest` is sent as `jev-latest`; set another model name for endpoints that serve their own.
 
-The neutral model alias `latest` means each carrier's current default model: Jev on TypeSafe, OpenRouter, Cloudflare, Vercel, and compatible endpoints, and `gpt-6-luna` on OpenAI. `jev-latest` keeps working.
+- **SubQ Decisions** (explicit only: `DISCERN_PROVIDER=subq`, with `DISCERN_SUBQ_API_KEY` preferred over `SUBQ_API_KEY`, optional `DISCERN_SUBQ_BASE_URL`, default `https://api.subq.ai/v1`): sends the native structured `{ model, state, questions }` to `/systemone`. Both `latest` and `jev-latest` map to `subq-snap-preview`; explicit model IDs pass through. Results report `provider: "subq"` and the effective response model.
+  - [Snap is in public preview](https://docs.subq.ai/endpoints/decisions-api/). It supports 2–255 Choice options, 2–10 Score levels, and question IDs up to 100 characters. We observed a 16-question request limit; larger calls are split into **serial** chunks under one deadline. State is repeated per chunk, so usage and latency grow with batch size. Usage is summed; probabilities and fractional scores are not rewritten. A failed or malformed chunk fails the whole call, exposes no partial reply, and stops remaining chunks. Successful earlier chunks may still be billed. Mixed effective models are rejected.
+  - Published pricing: $0.05 per million input tokens, output free. Context limit: 393,216 tokens; requests near it can be rejected. Image inputs are not exposed by this adapter.
+  - **SubQ retains API data indefinitely by default.** Organization-level zero data retention requires contacting SubQ; there is no documented per-request Decisions `store:false` control. Review [data retention](https://docs.subq.ai/using-the-api/data-retention/) before sending sensitive data.
+  - SubQ has its own calibration. Existing thresholds stay unchanged; run your own labeled evaluation before using them for policy. A key alone never selects this carrier.
 
-Set `DISCERN_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, `openai`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through; an empty value means `auto`. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one. `config.onReply` receives the raw, unvalidated reply before validation, for callers that judge each answer on their own; treat it as untrusted input.
+The neutral model alias `latest` means each carrier's current default model: Jev on TypeSafe, OpenRouter, Cloudflare, Vercel, and compatible endpoints, `gpt-6-luna` on OpenAI, and `subq-snap-preview` on SubQ. `jev-latest` keeps working.
+
+Set `DISCERN_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, `openai`, `subq`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through; an empty value means `auto`. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one. `config.onReply` receives the raw reply before final validation; SubQ validates each chunk before exposing the combined reply. Treat it as untrusted input.
 
 ## Validation
 
@@ -72,7 +78,7 @@ Every reply is checked before you see it. Validation requires exactly the reques
 
 ## Adding a provider
 
-The built-in list is a fixed, maintainer-curated set, currently: TypeSafe, OpenRouter, Cloudflare, Vercel, compatible endpoints, and OpenAI (explicit only). PRs that add a new built-in carrier are generally not accepted unless sufficient demand is shown. If you want support for a new provider, the supported path is a third-party driver package. I will accept PRs that link third-party providers from the READMEs of this package, [discern-browser](https://github.com/jkudish/discern-browser), and [discern-mcp](https://github.com/jkudish/discern-mcp).
+The built-in list is a fixed, maintainer-curated set, currently: TypeSafe, OpenRouter, Cloudflare, Vercel, compatible endpoints, OpenAI and SubQ (both explicit-only). PRs that add a new built-in carrier are generally not accepted unless sufficient demand is shown. If you want support for a new provider, the supported path is a third-party driver package. I will accept PRs that link third-party providers from the READMEs of this package, [discern-browser](https://github.com/jkudish/discern-browser), and [discern-mcp](https://github.com/jkudish/discern-mcp).
 
 ### No code: inject a transport
 
@@ -122,7 +128,7 @@ Published a driver package? Open an issue or pull request on any of the three re
 
 ### Adding a built-in carrier
 
-The built-ins are a fixed, maintainer-curated set (TypeSafe, OpenRouter, Cloudflare, Vercel, compatible endpoints, OpenAI). New built-ins are generally not accepted unless sufficient demand is shown; open an issue first. The mechanics, for when one is accepted:
+The built-ins are a fixed, maintainer-curated set (TypeSafe, OpenRouter, Cloudflare, Vercel, compatible endpoints, OpenAI, SubQ). New built-ins are generally not accepted unless sufficient demand is shown; open an issue first. The mechanics, for when one is accepted:
 
 - Add `src/transports/<name>.ts` exporting a driver: `name`, `isConfigured(env)`, `assertConfigured(env)`, and `create(env)` returning a `DiscernTransport`.
 - Register it in the `drivers` array in `src/provider.ts`, and add its name to the `BuiltinDriver` name union. Pick its auto-detection position deliberately; the order is the documented precedence.
@@ -154,6 +160,7 @@ Both consumers get every carrier, retry rule, and deadline from this package, so
   | `JEV_VERCEL_ZERO_DATA_RETENTION` | `DISCERN_VERCEL_ZERO_DATA_RETENTION` |
   | `JEV_OPENROUTER_BASE_URL`, `JEV_CLOUDFLARE_BASE_URL` | `DISCERN_OPENROUTER_BASE_URL`, `DISCERN_CLOUDFLARE_BASE_URL` |
   | `JEV_API_KEY`, `JEV_API_BASE_URL` | `DISCERN_API_KEY`, `DISCERN_API_BASE_URL` |
+  | `JEV_SUBQ_API_KEY`, `JEV_SUBQ_BASE_URL` | `DISCERN_SUBQ_API_KEY`, `DISCERN_SUBQ_BASE_URL` |
 
   Only the variables in `DISCERN_ENV_NAMES` are aliased; other `JEV_*` variables are ignored.
 
@@ -175,6 +182,7 @@ npm install
 npm run build
 npm test            # hermetic tests, no API key needed
 npm run test:live   # one real judgment per configured carrier; TYPESAFE_API_KEY and/or OPENAI_API_KEY
+node test/provider-parity.mjs subq typesafe openai cloudflare  # opt-in 30 labelled cases per provider; real keys/spend
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).

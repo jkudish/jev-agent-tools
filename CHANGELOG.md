@@ -12,6 +12,7 @@ Renamed from `@jkudish/jev-agent-tools` to `@jkudish/discern-agent-tools`, becau
 
 ### New carriers and models
 
+- SubQ Decisions: explicit-only `DISCERN_PROVIDER=subq`, `DISCERN_SUBQ_API_KEY` (or `SUBQ_API_KEY`), optional `DISCERN_SUBQ_BASE_URL`. `latest` and `jev-latest` map to `subq-snap-preview`. Native structured inputs and fractional scores are preserved. Batches over the observed 16-question limit run serially under one deadline; usage is summed and any failed/malformed chunk stops the whole call without a partial reply. SubQ retains data indefinitely by default; organization ZDR requires contacting SubQ.
 - OpenAI Decisions (public beta): `DISCERN_PROVIDER=openai` with `DISCERN_OPENAI_API_KEY` or `OPENAI_API_KEY`, optional `DISCERN_OPENAI_BASE_URL`. Never auto-detected. Nouls are sent as true/false choices carrying their criteria, state as labeled pretty-printed JSON, and requests over 200 questions are split into concurrent chunks.
 - Cloudflare's Clef decision models on the Cloudflare carrier: model `clef` or `clef-flash`, or any `@cf/` id. New `cloudflareModel()` export.
 - The `compatible` carrier for any System One endpoint (`DISCERN_API_KEY` and `DISCERN_API_BASE_URL`), moved from discern-mcp. It is auto-selected only when no other carrier is configured.
