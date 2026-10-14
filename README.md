@@ -1,10 +1,10 @@
-# Discern Agent Tools
+# Discern SDK
 
-[![CI](https://github.com/jkudish/discern-agent-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/jkudish/discern-agent-tools/actions/workflows/ci.yml)
+[![CI](https://github.com/jkudish/discern-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/jkudish/discern-sdk/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src=".github/discern-agent-tools-banner.png" alt="discern-agent-tools: one validated ask() across TypeSafe's Jev, Cloudflare's Clef, OpenAI Decisions, and SubQ Decisions." />
+  <img src=".github/discern-sdk-banner.png" alt="discern-sdk: one validated ask() across TypeSafe's Jev, Cloudflare's Clef, OpenAI Decisions, and SubQ Decisions." />
 </p>
 
 Multi-provider judgment transport with fail-closed validation, used by [Discern Browser](https://github.com/jkudish/discern-browser) and [Discern MCP](https://github.com/jkudish/discern-mcp). It sends typed questions to TypeSafe's Jev, Cloudflare's Clef, OpenAI Decisions, or SubQ Decisions.
@@ -18,7 +18,7 @@ One `ask()` picks a carrier from the environment, sends your typed questions, an
 Requires Node.js 22 or newer.
 
 ```bash
-npm install @jkudish/discern-agent-tools
+npm install @jkudish/discern-sdk
 ```
 
 ## Result contract
@@ -26,7 +26,7 @@ npm install @jkudish/discern-agent-tools
 `ask(input, config?)` returns `Promise<{ ok: true, answer, usage, model, provider } | { ok: false, code, message }>` and never throws a verdict. Every built-in carrier shares one HTTP path: it retries only 408, 409, 429, and 500-599, up to `config.maxAttempts` total attempts (default 3, clamped to 1-6), honoring `Retry-After` (capped at 5 s) or else a jittered exponential backoff. Network failures are never re-sent, because without an idempotency key a re-send can double-process a paid call. One `config.timeoutMs` deadline (default 60000) covers every attempt, and response bodies over 1,000,000 bytes are rejected while they stream. Transport failures return `request_failed` (the message includes the HTTP status, and for OpenRouter's token limit the code `max_tokens_exceeded`), `rate_limited` when 429 retries are exhausted, `unavailable` when 5xx retries are exhausted, or `timeout` when the deadline passes, and report the API's effective model rather than the requested alias; invalid responses return specific codes such as `refused` (the carrier declined a question), `answer_id_mismatch`, `invalid_distribution`, `invalid_noul`, `invalid_usage`, and `invalid_model`; configuration errors return `configuration_error`. Messages never include response bodies or credentials. The two consumers need different error behavior: discern-browser maps `!ok` to its own exception, while discern-mcp maps `!ok` to `invalid_response`.
 
 ```js
-import { ask } from "@jkudish/discern-agent-tools";
+import { ask } from "@jkudish/discern-sdk";
 
 const result = await ask({
   state: "A customer asks for a refund of a duplicate charge.",
@@ -85,7 +85,7 @@ The built-in list is a fixed, maintainer-curated set, currently: TypeSafe, OpenR
 `ask(input, { transport })` accepts any `DiscernTransport`: a `name` and an `ask(input)` returning `{ answers, usage, model }`. The validator checks the reply exactly as it checks a built-in carrier. The name is untrusted, so it never appears in error text.
 
 ```ts
-import { ask, type DiscernTransport } from "@jkudish/discern-agent-tools";
+import { ask, type DiscernTransport } from "@jkudish/discern-sdk";
 
 const myGateway: DiscernTransport = {
   name: "my-gateway",
@@ -116,7 +116,7 @@ const result = await ask(input, { transport: myGateway });
 Wrap your carrier in a small npm package that exports a factory, so callers keep their credentials in their own environment:
 
 ```ts
-import { ask } from "@jkudish/discern-agent-tools";
+import { ask } from "@jkudish/discern-sdk";
 import { createRequestyTransport } from "@example/requesty-discern-driver";
 
 const result = await ask(input, { transport: createRequestyTransport(process.env) });
@@ -150,7 +150,7 @@ Both consumers get every carrier, retry rule, and deadline from this package, so
 
 1.0.0 renames the package and adds the OpenAI carrier and Cloudflare's Clef models. Smaller behavior changes are listed in the [changelog](CHANGELOG.md): fractional and stricter score validation, the `refused` rejection code, an empty `DISCERN_PROVIDER` meaning `auto`, and the OpenRouter attribution title.
 
-- Install `@jkudish/discern-agent-tools` and update imports. `@jkudish/jev-agent-tools` is deprecated and receives no further releases.
+- Install `@jkudish/discern-sdk` and update imports. `@jkudish/jev-agent-tools` is deprecated and receives no further releases.
 - Rename environment variables from `JEV_<X>` to `DISCERN_<X>`. Through 1.x the old names still work: a `JEV_` value is used when its `DISCERN_` counterpart is unset or empty, and two different non-empty values are a configuration error that names both variables. `JEV_` names stop working in 2.0.
 
   | Before | After |
@@ -173,7 +173,7 @@ Model names are unchanged: `jev-latest` and pinned versions such as `jev-1.13` s
 
 ## Sponsoring
 
-If you find Discern Agent Tools useful, consider becoming a [sponsor](https://github.com/sponsors/jkudish) or [donating](https://stripe.com/@jkudish).
+If you find Discern SDK useful, consider becoming a [sponsor](https://github.com/sponsors/jkudish) or [donating](https://stripe.com/@jkudish).
 
 ## Development
 
