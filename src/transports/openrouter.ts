@@ -2,7 +2,7 @@ import type { BuiltinDriver } from "../provider.js";
 import { CarrierFailure, apiUrl, postJson, usageOf } from "./http.js";
 
 const TITLE = "discern";
-const REFERER = "https://github.com/jkudish/discern-agent-tools";
+const REFERER = "https://github.com/jkudish/discern-sdk";
 const LATEST = "~typesafe/jev-latest";
 
 /** Map a model name to OpenRouter's Decisions API model ID. `latest` and `jev-latest` follow OpenRouter's moving Jev alias. */

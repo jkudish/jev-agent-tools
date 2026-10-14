@@ -2,11 +2,11 @@
 
 ## 1.0.0 (unreleased)
 
-Renamed from `@jkudish/jev-agent-tools` to `@jkudish/discern-agent-tools`, because the package now carries Cloudflare's Clef and OpenAI's Decisions API alongside TypeSafe's Jev. See [Migrating from jev-agent-tools](README.md#migrating-from-jev-agent-tools).
+Renamed from `@jkudish/jev-agent-tools` to `@jkudish/discern-sdk`, because the package now carries Cloudflare's Clef and OpenAI's Decisions API alongside TypeSafe's Jev. See [Migrating from jev-agent-tools](README.md#migrating-from-jev-agent-tools).
 
 ### Rename
 
-- Package `@jkudish/discern-agent-tools`. Types are `DiscernTransport`, `DiscernTransportInput`, `DiscernTransportReply`, and `DiscernAnswer`; the `Jev*` names stay as deprecated aliases until 2.0. `openrouterModel()` replaces `openrouterJevModel()`, which also stays as an alias.
+- Package `@jkudish/discern-sdk`. Types are `DiscernTransport`, `DiscernTransportInput`, `DiscernTransportReply`, and `DiscernAnswer`; the `Jev*` names stay as deprecated aliases until 2.0. `openrouterModel()` replaces `openrouterJevModel()`, which also stays as an alias.
 - Environment variables are `DISCERN_*`. The listed legacy `JEV_*` names (the new `DISCERN_ENV_NAMES` export) keep working through 1.x; other `JEV_*` variables are ignored. A `JEV_`/`DISCERN_` pair with different values is a configuration error that names both variables and never their values. `normalizeDiscernEnv(env, names)` lets consumers alias their own variables.
 - Error messages start with `Discern provider <name>`. Rejection codes are unchanged; match on `code`.
 

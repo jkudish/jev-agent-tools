@@ -243,7 +243,7 @@ test("OpenRouter maps latest and pinned slugs, sends exact envelope and redacts 
     for (const model of ["typesafe/jev-latest", "~typesafe/jev-latest", "jev-1.13"]) await askJev(transport, { ...input, model });
     assert.equal(calls[0].url, "https://openrouter.ai/api/alpha/decisions");
     assert.equal(calls[0].init.method, "POST");
-    assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sk-or-secret", "Content-Type": "application/json", "HTTP-Referer": "https://github.com/jkudish/discern-agent-tools", "X-Title": "discern", "X-OpenRouter-Title": "discern" });
+    assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sk-or-secret", "Content-Type": "application/json", "HTTP-Referer": "https://github.com/jkudish/discern-sdk", "X-Title": "discern", "X-OpenRouter-Title": "discern" });
     assert.ok(calls[0].init.signal instanceof AbortSignal && !calls[0].init.signal.aborted);
     assert.deepEqual(JSON.parse(calls[0].init.body), { model: "~typesafe/jev-latest", state: input.state, questions });
     assert.deepEqual(calls.map((call) => JSON.parse(call.init.body).model), ["~typesafe/jev-latest", "typesafe/jev-1.12", "~typesafe/jev-latest", "~typesafe/jev-latest", "typesafe/jev-1.13"]);
