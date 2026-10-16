@@ -985,6 +985,7 @@ test("OpenRouter preserves asymmetric nested image bytes and Box using the decis
     ["typesafe/jev-1.14-20261014", geometry, undefined],
     ["typesafe/jev-1.14", geometry, undefined],
     ["typesafe/jev-1.13", geometry, "unsupported_feature"],
+    ["typesafe/jev-1.14-20261115", geometry, "unsupported_feature"],
     ["typesafe/jev-1.15-20261014", geometry, "unsupported_feature"],
     ["typesafe/jev-1.14-20261014", { ...geometry, left: 0.99 }, "invalid_box"],
   ]) {
