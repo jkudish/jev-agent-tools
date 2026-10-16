@@ -1,5 +1,6 @@
 import type { BuiltinDriver } from "../provider.js";
 import { CarrierFailure, postJson } from "./http.js";
+import { imageJson, STATE_IMAGES } from "../images.js";
 
 // OpenAI Decisions API (public beta): https://developers.openai.com/api/docs/guides/decisions
 // It is not Jev: a different model (gpt-6-luna) with its own calibration, so
@@ -128,14 +129,23 @@ export const openai: BuiltinDriver = {
     const url = `${(env.DISCERN_OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "")}/decisions`;
     return {
       name: this.name,
-      async ask({ state, questions, model, signal }) {
+      capabilities: (model) => openaiDecisionsModel(model) === OPENAI_DECISIONS_MODEL ? STATE_IMAGES : undefined,
+      async ask({ state, questions, model, signal, images }) {
         const effectiveRequest = openaiDecisionsModel(model);
-        const input = toDecisionInput(state);
+        const input = images ? [{ role: "user", content: [
+          { type: "input_text", text: toDecisionInput(state) },
+          ...Object.entries(images).flatMap(([id, asset]) => [
+            { type: "input_text", text: `Image ${id} (referenced in state):` },
+            { type: "input_image", image_url: `data:${asset.mediaType};base64,${asset.data_base64}` },
+          ]),
+        ] }] : toDecisionInput(state);
         const translated = Object.entries(questions).map(([name, question]) => toDecisionQuestion(name, question));
         if (!translated.length) throw new CarrierFailure(`${LABEL} has no questions (request not sent)`);
         const nouls = new Set(Object.entries(questions).filter(([, question]) => record(question) && question.type === "noul").map(([name]) => name));
         const chunks: DecisionQuestion[][] = [];
         for (let i = 0; i < translated.length; i += MAX_QUESTIONS_PER_REQUEST) chunks.push(translated.slice(i, i + MAX_QUESTIONS_PER_REQUEST));
+        // Validate every encoded chunk before any sibling sends paid work.
+        const bodies = chunks.map((chunk) => imageJson({ model: effectiveRequest, input, questions: chunk }, images));
         // Chunks share the input and run concurrently; any failure fails the
         // call and cancels its siblings, so no request or retry outlives ask().
         const siblings = new AbortController();
@@ -144,10 +154,10 @@ export const openai: BuiltinDriver = {
         else signal.addEventListener("abort", cancel, { once: true });
         let replies: unknown[];
         try {
-          replies = await Promise.all(chunks.map((chunk) => postJson(
+          replies = await Promise.all(bodies.map((body) => postJson(
             url,
             { Authorization: `Bearer ${key}`, Accept: "application/json", "Content-Type": "application/json" },
-            JSON.stringify({ model: effectiveRequest, input, questions: chunk }),
+            body,
             { label: LABEL, signal: siblings.signal, maxAttempts: options.maxAttempts },
           )));
         } catch (error) {
@@ -170,6 +180,7 @@ export const openai: BuiltinDriver = {
         };
         for (const reply of replies) {
           if (!record(reply)) throw new CarrierFailure(`${LABEL} invalid envelope (response omitted)`);
+          if (images && Object.hasOwn(reply, "model") && reply.model !== OPENAI_DECISIONS_MODEL) throw new CarrierFailure(`${LABEL} incompatible image chunk model (response omitted)`);
           const usage = reply.usage;
           // A malformed usage container poisons the sums like a malformed counter.
           if (usage !== undefined && !record(usage)) {

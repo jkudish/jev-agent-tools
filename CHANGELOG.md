@@ -8,7 +8,14 @@ Renamed from `@jkudish/jev-agent-tools` to `@jkudish/discern-sdk`, because the p
 
 - Package `@jkudish/discern-sdk`. Types are `DiscernTransport`, `DiscernTransportInput`, `DiscernTransportReply`, and `DiscernAnswer`; the `Jev*` names stay as deprecated aliases until 2.0. `openrouterModel()` replaces `openrouterJevModel()`, which also stays as an alias.
 - Environment variables are `DISCERN_*`. The listed legacy `JEV_*` names (the new `DISCERN_ENV_NAMES` export) keep working through 1.x; other `JEV_*` variables are ignored. A `JEV_`/`DISCERN_` pair with different values is a configuration error that names both variables and never their values. `normalizeDiscernEnv(env, names)` lets consumers alias their own variables.
-- Error messages start with `Discern provider <name>`. Rejection codes are unchanged; match on `code`.
+- Error messages start with `Discern provider <name>`; match on `code`.
+
+### Image judgments and Box
+
+- Normal root export `image(bytes)` and `ask()` support bounded PNG/JPEG images with provider/protocol/model capability checks, without an enable flag. TypeSafe and OpenRouter/Jev preserve inline placement; OpenAI, SubQ, Clef and versioned Vercel use shared state images. Cloudflare Jev, Vercel's generic alias, and compatible endpoints remain text-only. Live image evaluation is pending; see the README matrix before release.
+- Box answers join `DiscernAnswer` on explicit Jev 1.14 TypeSafe/OpenRouter routes. Ordered normalized geometry is validated; null confidence stays unknown. Box is not a presence judgment. New rejections: `invalid_image`, `unsupported_feature`, `invalid_box`. Exhaustive answer/error consumers need new cases.
+- Images snapshot bytes and references before sending. Count, decoded-byte and encoded-body limits apply before chunk 1. Unsupported features never fall back or silently become text. Effective image-model downgrades do not reach `onReply` recovery.
+- Vercel image requests use decision `stateParts` with the existing ZDR option preserved; text stays on the evaluation protocol. Clef images use its model-specific REST envelope with conservative state/question limits. SubQ repeats images per serial chunk and retains its all-or-nothing reply policy.
 
 ### New carriers and models
 

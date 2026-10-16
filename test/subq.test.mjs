@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ask, resolveTransport } from "../dist/index.js";
+import { ask, image, resolveTransport } from "../dist/index.js";
 
 const env = { DISCERN_PROVIDER: "subq", SUBQ_API_KEY: "low-secret" };
 const input = { state: ["structured", { value: 7 }], model: "latest", signal: new AbortController().signal };
@@ -132,4 +132,33 @@ test("SubQ cancellation and one shared deadline prevent later chunks", async () 
       assert.equal(calls, 2);
     });
   }
+});
+
+test("SubQ repeats one state image across serial chunks, preflights later bodies, and stops after an invalid reply", async () => {
+  const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const request = { ...input, state: { photo: image(bytes) }, questions: questions(33) };
+  let calls = 0;
+  await withFetch(async (_url, init) => {
+    calls++;
+    const body = JSON.parse(init.body);
+    assert.deepEqual(body.images, [{ mediaType: "image/png", base64: bytes.toString("base64") }]);
+    assert.equal(typeof body.state.photo, "string");
+    return Response.json({ answers: answers(body.questions), usage, model: "subq-snap-preview" });
+  }, async () => {
+    const result = await ask(request, { env });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(calls, 3);
+    assert.equal(result.answer.q32.score, 0.73);
+    rejected(await ask({ ...request, questions: { ...request.questions, q32: { type: "noul", instructions: "x".repeat(13 * 1024 * 1024) } } }, { env }), "invalid_image", /13 MiB/);
+    assert.equal(calls, 3, "oversized final chunk must not spend on chunk 1");
+  });
+  calls = 0;
+  await withFetch(async (_url, init) => {
+    calls++;
+    return Response.json({ answers: calls === 2 ? {} : answers(JSON.parse(init.body).questions), usage, model: "subq-snap-preview" });
+  }, async () => {
+    const result = await ask(request, { env });
+    assert.equal(result.code, "answer_id_mismatch");
+    assert.equal(calls, 2);
+  });
 });
