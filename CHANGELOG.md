@@ -12,8 +12,9 @@ Renamed from `@jkudish/jev-agent-tools` to `@jkudish/discern-sdk`, because the p
 
 ### Image judgments and Box
 
-- Normal root export `image(bytes)` and `ask()` support bounded PNG/JPEG images with provider/protocol/model capability checks, without an enable flag. TypeSafe and OpenRouter/Jev preserve inline placement; OpenAI, SubQ, Clef and versioned Vercel use shared state images. Cloudflare Jev, Vercel's generic alias, and compatible endpoints remain text-only. Live image evaluation is pending; see the README matrix before release.
+- Normal root export `image(bytes)` and `ask()` support bounded PNG/JPEG images with provider/protocol/model capability checks, without an enable flag. TypeSafe and OpenRouter/Jev preserve inline placement; OpenAI, SubQ, Clef and versioned Vercel use shared state images. Cloudflare Jev, Vercel's generic alias, and compatible endpoints remain text-only. The README records synthetic live results and semantic misses; Vercel remains account-blocked and live-unverified.
 - Box answers join `DiscernAnswer` on explicit Jev 1.14 TypeSafe/OpenRouter routes. Ordered normalized geometry is validated; null confidence stays unknown. Box is not a presence judgment. New rejections: `invalid_image`, `unsupported_feature`, `invalid_box`. Exhaustive answer/error consumers need new cases.
+- Accept OpenRouter's live-observed `typesafe/jev-1.14-20261014` effective snapshot for image/Box replies, without accepting arbitrary future versions. The evaluation harness stops on protocol/access failures and reports completed request counts.
 - Images snapshot bytes and references before sending. Count, decoded-byte and encoded-body limits apply before chunk 1. Unsupported features never fall back or silently become text. Effective image-model downgrades do not reach `onReply` recovery.
 - Vercel image requests use decision `stateParts` with the existing ZDR option preserved; text stays on the evaluation protocol. Clef images use its model-specific REST envelope with conservative state/question limits. SubQ repeats images per serial chunk and retains its all-or-nothing reply policy.
 

@@ -1001,6 +1001,35 @@ test("OpenRouter preserves asymmetric nested image bytes and Box using the decis
     assert.equal(body.questions.visible.instructions.image_url.url, `data:image/jpeg;base64,${jpeg.toString("base64")}`);
     return Response.json({ answers: visualAnswers, usage, model: "typesafe/jev-1.14" });
   }, async () => assert.equal((await ask({ ...input, state: { photo: first }, questions: { visible: { type: "noul", instructions: second } }, model: "typesafe/jev-1.14" }, { env: { OPENROUTER_API_KEY: "sk-or-secret" } })).ok, true));
+  // Live OpenRouter resolves the public 1.14 slug to this dated snapshot.
+  for (const [model, box, code] of [
+    ["typesafe/jev-1.14-20261014", geometry, undefined],
+    ["typesafe/jev-1.14", geometry, undefined],
+    ["typesafe/jev-1.13", geometry, "unsupported_feature"],
+    ["typesafe/jev-1.15-20261014", geometry, "unsupported_feature"],
+    ["typesafe/jev-1.14-20261014", { ...geometry, left: 0.99 }, "invalid_box"],
+  ]) {
+    let observed = false;
+    await withFetch(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      assert.equal(body.model, "typesafe/jev-1.14");
+      assert.equal(body.questions.location.type, "box");
+      assert.equal(body.state.photo.image_url.url, `data:image/png;base64,${png.toString("base64")}`);
+      return Response.json({ answers: { location: { type: "box", box, confidence: 0.93 } }, usage, model });
+    }, async () => {
+      const result = await ask({ ...input, state: { photo: first }, questions: { location: { type: "box", instructions: "the red object" } }, model: "typesafe/jev-1.14" },
+        { env: { OPENROUTER_API_KEY: "sk-or-secret" }, onReply: () => { observed = true; } });
+      if (code) {
+        rejected(result, code, code === "unsupported_feature" ? /Effective/ : /ordered/);
+        if (code === "unsupported_feature") assert.equal(observed, false);
+      } else {
+        assert.equal(result.ok, true, result.message);
+        assert.deepEqual(result.answer.location, { type: "box", box: geometry, confidence: 0.93 });
+        assert.equal(result.model, model);
+        assert.deepEqual(result.usage, usage);
+      }
+    });
+  }
 });
 
 test("Vercel images use decision stateParts and preserve ZDR; lossy warnings are not success", async () => {

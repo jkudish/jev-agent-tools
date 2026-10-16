@@ -54,9 +54,11 @@ console.log(JSON.stringify({ fixture_version: 1, provider, model, requests: jobs
   fixtures: Object.fromEntries([...bytes].map(([name, value]) => [name, createHash("sha256").update(value).digest("hex")])) }));
 if (!dryRun) {
   let failures = 0;
+  let completed = 0;
   for (const job of jobs) {
     const start = performance.now();
     const result = await ask({ state: job.state, questions: job.questions, model, signal: AbortSignal.timeout(60_000) }, { env, maxAttempts: 1 });
+    completed++;
     const checks = [];
     let overlap = null;
     if (result.ok) {
@@ -76,7 +78,9 @@ if (!dryRun) {
     if (!pass) failures++;
     // Synthetic answers only; never print credentials or encoded request bodies.
     console.log(JSON.stringify({ id: job.id, pass, elapsed_ms: Math.round(performance.now() - start), expected: job.expected, iou: overlap, result }));
+    // A protocol/access failure is not a reason to spend on the remaining fixtures.
+    if (!result.ok) break;
   }
-  console.log(JSON.stringify({ provider, model, requests: jobs.length, failures }));
+  console.log(JSON.stringify({ provider, model, requests: completed, planned_requests: jobs.length, failures }));
   if (failures) process.exitCode = 1;
 }
