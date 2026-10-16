@@ -1,5 +1,6 @@
 import { validateReply, type BuiltinDriver, type DiscernTransportReply } from "../provider.js";
 import { apiUrl, CarrierFailure, CarrierRejection, postJson, usageOf } from "./http.js";
+import { imageJson, STATE_IMAGES } from "../images.js";
 
 const LABEL = "SubQ Decisions API";
 const DEFAULT_MODEL = "subq-snap-preview";
@@ -20,21 +21,28 @@ export const subq: BuiltinDriver = {
     const url = apiUrl(env.DISCERN_SUBQ_BASE_URL || "https://api.subq.ai/v1", "/systemone");
     return {
       name: this.name,
+      capabilities: (model) => ["latest", "jev-latest", DEFAULT_MODEL].includes(model) ? { ...STATE_IMAGES, maxImages: 1 } : undefined,
       async ask(input) {
-        const { state, questions, model, signal } = input;
+        const { state, questions, model, signal, images } = input;
         const requested = model === "latest" || model === "jev-latest" ? DEFAULT_MODEL : model;
         const entries = Object.entries(questions);
         if (!entries.length) throw new CarrierFailure(`${LABEL} has no questions (request not sent)`);
         const merged: [string, unknown][] = [];
         const usage = { input_tokens: 0, output_tokens: 0 };
         let effective: string | undefined;
+        const chunks: { questions: Record<string, unknown>; body: string }[] = [];
+        for (let start = 0; start < entries.length; start += MAX_QUESTIONS) {
+          const chunk = Object.fromEntries(entries.slice(start, start + MAX_QUESTIONS));
+          chunks.push({ questions: chunk, body: imageJson({ model: requested, state, questions: chunk,
+            ...(images ? { images: Object.values(images).map((asset) => ({ mediaType: asset.mediaType, base64: asset.data_base64 })) } : {}),
+          }, images) });
+        }
         // Serial chunks share ask()'s deadline. A failed chunk exposes no
         // partial reply to onReply consumers and sends no remaining requests.
-        for (let start = 0; start < entries.length; start += MAX_QUESTIONS) {
+        for (const { questions: chunk, body: encoded } of chunks) {
           signal.throwIfAborted();
-          const chunk = Object.fromEntries(entries.slice(start, start + MAX_QUESTIONS));
           const body = await postJson(url, { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-            JSON.stringify({ model: requested, state, questions: chunk }), { label: LABEL, signal, maxAttempts: options.maxAttempts });
+            encoded, { label: LABEL, signal, maxAttempts: options.maxAttempts });
           signal.throwIfAborted();
           if (!record(body)) throw new CarrierFailure(`${LABEL} invalid envelope (response omitted)`);
           const reply: DiscernTransportReply = {
@@ -42,6 +50,7 @@ export const subq: BuiltinDriver = {
             usage: usageOf(body.usage),
             model: (Object.hasOwn(body, "model") ? body.model : requested) as string,
           };
+          if (images && !["latest", "jev-latest", DEFAULT_MODEL].includes(reply.model)) throw new CarrierFailure(`${LABEL} incompatible image chunk model (response omitted)`);
           const checked = validateReply({ ...input, questions: chunk }, reply, "subq");
           if (!checked.ok) throw new CarrierRejection(checked);
           if (effective !== undefined && effective !== reply.model) throw new CarrierFailure(`${LABEL} inconsistent chunk models (response omitted)`);

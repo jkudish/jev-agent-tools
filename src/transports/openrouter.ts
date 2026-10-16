@@ -1,5 +1,6 @@
 import type { BuiltinDriver } from "../provider.js";
 import { CarrierFailure, apiUrl, postJson, usageOf } from "./http.js";
+import { imageJson, inlineImages, JEV_BOX, JEV_IMAGES } from "../images.js";
 
 const TITLE = "discern";
 const REFERER = "https://github.com/jkudish/discern-sdk";
@@ -45,7 +46,12 @@ export const openrouter: BuiltinDriver = {
     const url = apiUrl(env.DISCERN_OPENROUTER_BASE_URL || "https://openrouter.ai/api", "/alpha/decisions");
     return {
       name: this.name,
-      async ask({ state, questions, model, signal }) {
+      capabilities(model) {
+        const slug = openrouterModel(model);
+        return ["typesafe/jev-1.14", "typesafe/jev-1.14.0"].includes(slug) ? JEV_BOX
+          : [LATEST, "typesafe/jev-1.13", "typesafe/jev-1.13.0"].includes(slug) ? JEV_IMAGES : undefined;
+      },
+      async ask({ state, questions, model, signal, images }) {
         const slug = openrouterModel(model);
         const body = await postJson(url, {
           Authorization: `Bearer ${key}`,
@@ -53,7 +59,7 @@ export const openrouter: BuiltinDriver = {
           "HTTP-Referer": REFERER,
           "X-Title": TITLE,
           "X-OpenRouter-Title": TITLE,
-        }, JSON.stringify({ model: slug, state, questions }), { label: "OpenRouter decisions API", signal, maxAttempts: options.maxAttempts, errorDetail: openrouterErrorType }) as Record<string, unknown> | null;
+        }, imageJson({ model: slug, state: images ? inlineImages(state, images) : state, questions: images ? inlineImages(questions, images) : questions }, images), { label: "OpenRouter decisions API", signal, maxAttempts: options.maxAttempts, errorDetail: openrouterErrorType }) as Record<string, unknown> | null;
         if (!body || typeof body !== "object" || Array.isArray(body)) throw new CarrierFailure("OpenRouter decisions API returned an invalid envelope (response omitted)");
         // Report the effective snapshot; a present-but-malformed value reaches shared validation.
         return { answers: body.answers, usage: usageOf(body.usage), model: (Object.hasOwn(body, "model") ? body.model : slug) as string };

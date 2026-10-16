@@ -64,13 +64,62 @@ Auto-selection tries them in this order:
 
 - **SubQ Decisions** (explicit only: `DISCERN_PROVIDER=subq`, with `DISCERN_SUBQ_API_KEY` preferred over `SUBQ_API_KEY`, optional `DISCERN_SUBQ_BASE_URL`, default `https://api.subq.ai/v1`): sends the native structured `{ model, state, questions }` to `/systemone`. Both `latest` and `jev-latest` map to `subq-snap-preview`; explicit model IDs pass through. Results report `provider: "subq"` and the effective response model.
   - [Snap is in public preview](https://docs.subq.ai/endpoints/decisions-api/). It supports 2–255 Choice options, 2–10 Score levels, and question IDs up to 100 characters. We observed a 16-question request limit; larger calls are split into **serial** chunks under one deadline. State is repeated per chunk, so usage and latency grow with batch size. Usage is summed; probabilities and fractional scores are not rewritten. A failed or malformed chunk fails the whole call, exposes no partial reply, and stops remaining chunks. Successful earlier chunks may still be billed. Mixed effective models are rejected.
-  - Published pricing: $0.05 per million input tokens, output free. Context limit: 393,216 tokens; requests near it can be rejected. Image inputs are not exposed by this adapter.
+  - Published pricing: $0.05 per million input tokens, output free. Context limit: 393,216 tokens; requests near it can be rejected. Image state is repeated on every chunk, increasing usage.
   - **SubQ retains API data indefinitely by default.** Organization-level zero data retention requires contacting SubQ; there is no documented per-request Decisions `store:false` control. Review [data retention](https://docs.subq.ai/using-the-api/data-retention/) before sending sensitive data.
   - SubQ has its own calibration. Existing thresholds stay unchanged; run your own labeled evaluation before using them for policy. A key alone never selects this carrier.
 
 The neutral model alias `latest` means each carrier's current default model: Jev on TypeSafe, OpenRouter, Cloudflare, Vercel, and compatible endpoints, `gpt-6-luna` on OpenAI, and `subq-snap-preview` on SubQ. `jev-latest` keeps working.
 
 Set `DISCERN_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, `openai`, `subq`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through; an empty value means `auto`. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one. `config.onReply` receives the raw reply before final validation; SubQ validates each chunk before exposing the combined reply. Treat it as untrusted input.
+
+## Image judgments and Box (1.0, unreleased)
+
+Use `image(bytes)` from the normal SDK entry. No enable flag or experimental import is needed. Upstream vision and Box APIs are experimental; protocol tests do not establish visual accuracy. Live image evaluation is still required before releasing these routes.
+
+```js
+import { readFile } from "node:fs/promises";
+import { ask, image } from "@jkudish/discern-sdk";
+
+const result = await ask({
+  state: { photo: image(await readFile("photo.png")) },
+  questions: {
+    present: { type: "noul", instructions: "A red mug is visible in photo." },
+    location: { type: "box", instructions: "the red mug in photo" },
+  },
+  model: "jev-1.14.0",
+  signal: new AbortController().signal,
+}, { env: { ...process.env, DISCERN_PROVIDER: "typesafe" } });
+```
+
+The caller reads files explicitly. `image()` accepts only `Uint8Array` (including Buffer) or ArrayBuffer, snapshots the bytes, and recognizes PNG/JPEG signatures. It throws TypeError for invalid or oversized input; `ask()` returns typed rejections. The SDK never fetches image URLs, opens paths, resizes images, applies EXIF orientation, or stores assets. `JSON.stringify(imageValue)` rejects; pass the value through `ask()`.
+
+Image-bearing state/questions must be plain JSON objects/arrays/primitives plus image values, without custom `toJSON`, classes, cycles, functions, or graphs over 64 levels/100,000 visited nodes. Reusing the same image value shares one asset. Common limits: 4 distinct images, 4 MiB each, 8 MiB aggregate decoded, 13 MiB final JSON body. All chunks are size-checked before the first send. Text-only serialization and default provider/model selection stay unchanged.
+
+| Provider/protocol | Image models | Placement / count | Native Box |
+| --- | --- | --- | --- |
+| TypeSafe `/v1/systemone` | `jev-1.13.0`, `jev-1.14.0`, `latest`, `jev-latest`, `jev-preview` | State, instructions, criteria / 4 | Explicit `jev-1.14.0` only |
+| OpenRouter `/api/alpha/decisions` | `typesafe/jev-1.13`, `typesafe/jev-1.14` (also `.0` suffixes), existing latest aliases | State, instructions, criteria / 4 | Explicit `typesafe/jev-1.14` or `typesafe/jev-1.14.0` |
+| OpenAI `/v1/decisions` | `gpt-6-luna`, existing default aliases | State / 4 | No |
+| SubQ `/v1/systemone` | `subq-snap-preview`, existing default aliases | State / 1 initially | No |
+| Cloudflare model-specific `/ai/run/@cf/cloudflare/…` | `clef`, `clef-flash` (or qualified IDs) | State / 1; at most 64 questions, 2,000 serialized state bytes | No |
+| Vercel `/v4/ai/decision-model` | `typesafe-ai/jev-1.13.0`, `typesafe-ai/jev-1.14.0` | State / 1 initially | No, including Jev 1.14 |
+| Cloudflare `typesafe/jev`, Vercel generic alias/evaluation protocol, generic compatible endpoint | Text only | None | No |
+
+These are conservative adapter profiles, not predictions about future versions. Unknown combinations return `unsupported_feature` before sending. Model version alone does not establish carrier support. Clef's 2,000-byte state cap reduces truncation risk; only live tail-sentinel checks can establish retained evidence. Multi-image mapping on SubQ/Clef/Vercel remains restricted until tested. Direct TypeSafe image requests automatically add `TypeSafe-Danger-Zone-Images: true`; Vercel images use decision `stateParts` while text stays on the evaluation route and both retain configured ZDR options. Feature-loss warnings and unsupported effective models fail closed. Rich question images on state-only routes are rejected, never flattened to text.
+
+TypeSafe also validates decoding, dimensions (currently 280–1568 pixels per side), and expanded image size. This dependency-free SDK checks signatures and byte bounds only; a locally accepted file can still be rejected upstream. See [TypeSafe images](https://docs.typesafe.ai/images), [Box](https://docs.typesafe.ai/primitives/box), and [OpenRouter multimodal Decisions](https://openrouter.ai/docs/guides/community/multimodal-decisions).
+
+Box requires exactly one distinct image in state and no question images. A successful answer is `{type:"box", box:{top,bottom,left,right}, confidence:number|null}`. Coordinates are normalized to `[0,1]`; `top < bottom` and `left < right`. Invalid geometry is `invalid_box`, never clamped or reordered. Missing confidence becomes null. **A Box does not establish presence or uniqueness:** even an absent target can receive coordinates. Compose separate presence/uniqueness judgments before using a box; Discern MCP's `locate_image` does this and always requests review. Browser remains text/DOM-driven and never clicks these coordinates.
+
+Supplying images sends them to the selected provider under its retention policy, including SubQ's indefinite retention by default. No automatic fallback occurs. Existing retry/deadline rules apply; repeat chunks and retries can incur charges. The public answer/error unions now include Box, `invalid_image`, `unsupported_feature`, and `invalid_box`; exhaustive consumers must handle them.
+
+Injected transports remain text-only unless `capabilities(model)` declares image placement, Box availability and limits. Their `ask` receives a call-local `images` map of `{mediaType,data_base64}` keyed by opaque IDs referenced in state/questions. The embedder must preserve the bytes and references. `onReply` is withheld if the effective image model loses requested capabilities; otherwise it remains raw and untrusted.
+
+### Evaluate a configured image route
+
+After building, `node test/vision-live.mjs typesafe jev-1.14.0 --dry-run` lists fixture hashes and request count without inference. It still requires the selected provider's configuration. Remove `--dry-run` only with spend/data approval: the script makes 7–11 paid requests on that one route, `maxAttempts:1`, using only versioned synthetic images. Select other providers/models with the two positional arguments. It never runs as part of `npm test` or the existing CI live smoke.
+
+The 480×320 fixtures cover PNG/JPEG, pixel-only red/blue swaps, absence, multiple targets, a misleading caption, and visual instructions. Ground truth for the right rectangle is `{top:40/320,bottom:230/320,left:290/480,right:430/480}`. A tail sentinel tests state retention; supported multi-image/inline routes also get reversed-order identity checks. JSON-line receipts include expected/actual judgments, model/provider, usage, latency, and Box intersection-over-union (required ≥0.8 on unique positives). These are demonstration gates, not production calibration. Record the tested commit and receipt; an offline pass does not substitute for this live check.
 
 ## Validation
 

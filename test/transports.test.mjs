@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ask, cloudflareModel, DISCERN_ENV_NAMES, normalizeDiscernEnv, openaiDecisionsModel, openrouterJevModel, openrouterModel, resolveTransport } from "../dist/index.js";
+import { ask, image, cloudflareModel, DISCERN_ENV_NAMES, normalizeDiscernEnv, openaiDecisionsModel, openrouterJevModel, openrouterModel, resolveTransport } from "../dist/index.js";
 import { typesafe } from "../dist/transports/typesafe.js";
 import { openrouter } from "../dist/transports/openrouter.js";
 import { cloudflare } from "../dist/transports/cloudflare.js";
@@ -877,5 +877,178 @@ test("oracle fixes: no leaked listeners or timers, clamped timeout, optional sig
   const wrappedOpenRouter = (inner) => ({ name: inner.name, ask: (request) => inner.ask(request) });
   await withFetch(async () => Response.json({ error: { message: 'HTTP 400: {"detail":{"error_type":"max_tokens_exceeded"}}' } }, { status: 400 }), async () => {
     rejected(await ask(input, { transport: wrappedOpenRouter(resolveTransport({ OPENROUTER_API_KEY: "sk-or-x" })) }), "request_failed", /HTTP 400, max_tokens_exceeded/);
+  });
+});
+
+// Tiny signature fixtures test transport bytes, not image decoding or model accuracy.
+const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 17]);
+const jpeg = Buffer.from([255, 216, 255, 42]);
+const visualQuestions = { visible: { type: "noul", instructions: "A red object is visible" } };
+const visualAnswers = { visible: { type: "noul", noul: 0.92 } };
+const geometry = { top: 0.13, bottom: 0.72, left: 0.61, right: 0.89 };
+const tsEnv = { DISCERN_PROVIDER: "typesafe", TYPESAFE_API_KEY: "ts-secret" };
+
+test("normal image API snapshots bytes, shares references, preserves inline placement and refuses text serialization", async () => {
+  const bytes = Buffer.from(png), first = image(bytes), second = image(jpeg);
+  bytes.fill(0);
+  assert.throws(() => JSON.stringify(first), /through ask/);
+  for (const bad of ["https://image.test/a.png", "./a.png", {}, new Uint8Array([1]), new Uint8Array(4 * 1024 * 1024 + 1)]) assert.throws(() => image(bad));
+  await withFetch(async (_url, init) => {
+    const body = JSON.parse(init.body);
+    assert.equal(init.headers["TypeSafe-Danger-Zone-Images"], "true");
+    assert.equal(Object.keys(body.assets).length, 2);
+    assert.equal(body.state.photo, body.questions.visible.instructions.photo);
+    assert.deepEqual(Buffer.from(body.assets[body.state.photo].data_base64, "base64"), png);
+    assert.deepEqual(Buffer.from(body.assets[body.questions.visible.criteria.true].data_base64, "base64"), jpeg);
+    assert.equal(body.assets[body.state.photo].format, "png");
+    return Response.json({ answers: visualAnswers, usage, model: "jev-1.13.0" });
+  }, async () => {
+    const result = await ask({ ...input, state: { photo: first }, questions: { visible: { type: "noul", instructions: { photo: first }, criteria: { true: second, false: null } } }, model: "jev-1.13.0" }, { env: tsEnv });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(result.answer.visible.noul, 0.92);
+  });
+});
+
+test("image feature preflight rejects unsupported carrier, version, placement and limits without sending", async () => {
+  let calls = 0;
+  const photo = image(png);
+  const envs = [
+    [tsEnv, "jev-1.12.0"], [tsEnv, "jev-2.0.0"],
+    [{ DISCERN_PROVIDER: "cloudflare", CLOUDFLARE_API_TOKEN: "cf", CLOUDFLARE_ACCOUNT_ID: "a" }, "latest"],
+    [{ DISCERN_PROVIDER: "vercel", AI_GATEWAY_API_KEY: "v" }, "latest"],
+    [{ DISCERN_PROVIDER: "compatible", DISCERN_API_KEY: "c", DISCERN_API_BASE_URL: "https://fixture.test" }, "jev-1.14.0"],
+  ];
+  await withFetch(async () => { calls++; throw Error("unexpected send"); }, async () => {
+    for (const [env, model] of envs) rejected(await ask({ ...input, state: { photo }, questions: visualQuestions, model }, { env }), "unsupported_feature", /support/);
+    const custom = { name: "fixture", ask: async () => { calls++; return { answers: visualAnswers, usage, model: "image-model" }; } };
+    rejected(await ask({ ...input, state: photo, questions: visualQuestions }, { transport: custom }), "unsupported_feature", /support/);
+    for (const env of [
+      { DISCERN_PROVIDER: "openai", OPENAI_API_KEY: "o" },
+      { DISCERN_PROVIDER: "subq", SUBQ_API_KEY: "s" },
+      { DISCERN_PROVIDER: "vercel", AI_GATEWAY_API_KEY: "v" },
+    ]) {
+      rejected(await ask({ ...input, state: {}, questions: { visible: { type: "noul", instructions: photo } }, model: env.DISCERN_PROVIDER === "vercel" ? "typesafe-ai/jev-1.14.0" : "latest" }, { env }), "unsupported_feature", /placement/);
+      rejected(await ask({ ...input, state: photo, questions: { box: { type: "box" } }, model: env.DISCERN_PROVIDER === "vercel" ? "typesafe-ai/jev-1.14.0" : "latest" }, { env }), "unsupported_feature", /Box/);
+    }
+    for (const model of ["jev-1.13.0", "latest", "jev-preview"]) rejected(await ask({ ...input, state: photo, questions: { box: { type: "box" } }, model }, { env: tsEnv }), "unsupported_feature", /Box/);
+    const images = Array.from({ length: 5 }, () => image(png));
+    rejected(await ask({ ...input, state: images, questions: visualQuestions }, { env: tsEnv }), "invalid_image", /count/);
+    const big = Buffer.alloc(3 * 1024 * 1024); png.copy(big);
+    rejected(await ask({ ...input, state: [image(big), image(big), image(big)], questions: visualQuestions }, { env: tsEnv }), "invalid_image", /decoded/);
+    const cycle = { photo }; cycle.self = cycle;
+    rejected(await ask({ ...input, state: cycle, questions: visualQuestions }, { env: tsEnv }), "invalid_image", /cycles/);
+    for (const other of [new Date(), { toJSON: () => ({ secret: "body-secret" }) }, () => "hidden"]) {
+      rejected(await ask({ ...input, state: { other, photo }, questions: visualQuestions }, { env: tsEnv }), "invalid_image", /plain JSON/);
+    }
+    rejected(await ask({ ...input, state: { photo, huge: "x".repeat(13 * 1024 * 1024) }, questions: visualQuestions }, { env: tsEnv }), "invalid_image", /13 MiB/);
+    assert.equal(calls, 0);
+  });
+});
+
+test("Box is a raw normalized answer, not presence; invalid geometry and model downgrade fail closed", async () => {
+  const request = { ...input, state: { photo: image(png) }, model: "jev-1.14.0", questions: { box: { type: "box", instructions: "the red object" } } };
+  for (const [box, confidence, ok] of [[geometry, 0.91, true], [{ top: 0, bottom: 1, left: 0, right: 1 }, null, true], [geometry, undefined, true],
+    [{ ...geometry, left: 0.9 }, 0.9, false], [{ ...geometry, top: 0.72 }, 0.9, false], [{ ...geometry, right: 1.01 }, 0.9, false],
+    [geometry, -0.1, false], [geometry, 1.01, false], [{ ...geometry, top: null }, 0.9, false]]) {
+    await withFetch(async () => Response.json({ answers: { box: { type: "box", box, confidence } }, usage, model: request.model }), async () => {
+      const result = await ask(request, { env: tsEnv });
+      assert.equal(result.ok, ok, result.message);
+      if (ok) { assert.deepEqual(result.answer.box.box, box); assert.equal(result.answer.box.confidence, confidence ?? null); }
+      else assert.equal(result.code, "invalid_box");
+    });
+  }
+  await withFetch(async () => Response.json({ answers: { box: { type: "box", box: geometry, confidence: 0.99 } }, usage, model: "jev-1.13.0" }), async () => {
+    let observed = false;
+    rejected(await ask(request, { env: tsEnv, onReply: () => { observed = true; } }), "unsupported_feature", /Effective/);
+    assert.equal(observed, false);
+  });
+  let sent = false;
+  await withFetch(async () => { sent = true; throw Error(); }, async () => {
+    for (const state of [{ photo: image(png), other: image(jpeg) }, {}]) rejected(await ask({ ...request, state }, { env: tsEnv }), "invalid_image", /exactly one/);
+    assert.equal(sent, false);
+  });
+});
+
+test("OpenRouter preserves asymmetric nested image bytes and Box using the decisions route", async () => {
+  const first = image(png), second = image(jpeg);
+  await withFetch(async (url, init) => {
+    assert.match(url, /\/alpha\/decisions$/);
+    const body = JSON.parse(init.body);
+    assert.equal(body.assets, undefined);
+    assert.equal(body.images, undefined);
+    assert.equal(body.state.photo.image_url.url, `data:image/png;base64,${png.toString("base64")}`);
+    assert.equal(body.questions.visible.instructions.image_url.url, `data:image/jpeg;base64,${jpeg.toString("base64")}`);
+    return Response.json({ answers: visualAnswers, usage, model: "typesafe/jev-1.14" });
+  }, async () => assert.equal((await ask({ ...input, state: { photo: first }, questions: { visible: { type: "noul", instructions: second } }, model: "typesafe/jev-1.14" }, { env: { OPENROUTER_API_KEY: "sk-or-secret" } })).ok, true));
+});
+
+test("Vercel images use decision stateParts and preserve ZDR; lossy warnings are not success", async () => {
+  const env = { DISCERN_PROVIDER: "vercel", AI_GATEWAY_API_KEY: "ai-secret", DISCERN_VERCEL_ZERO_DATA_RETENTION: "true" };
+  for (const warnings of [undefined, [{ type: "unsupported", feature: "body-secret" }], [{ type: "compatibility", message: "body-secret" }]]) {
+    await withFetch(async (url, init) => {
+      assert.equal(url, "https://ai-gateway.vercel.sh/v4/ai/decision-model");
+      assert.equal(init.headers["ai-decision-model-specification-version"], "4");
+      assert.equal(init.headers["ai-evaluation-model-specification-version"], undefined);
+      const body = JSON.parse(init.body);
+      assert.equal(body.state, undefined);
+      assert.deepEqual(body.providerOptions, { gateway: { zeroDataRetention: true } });
+      const [json, label, file] = body.stateParts;
+      assert.equal(json.type, "json"); assert.ok(label.text.includes(json.value.photo));
+      assert.deepEqual(file, { type: "file", mediaType: "image/png", data: { type: "data", data: png.toString("base64") } });
+      return Response.json({ answers: { visible: { type: "boolean", probability: 0.92 } }, usage: { inputTokens: 9, outputTokens: 1 }, model: "typesafe-ai/jev-1.14.0", warnings });
+    }, async () => {
+      const result = await ask({ ...input, state: { photo: image(png) }, questions: visualQuestions, model: "typesafe-ai/jev-1.14.0" }, { env });
+      if (warnings) rejected(result, "request_failed", /preserve/);
+      else { assert.equal(result.ok, true, result.message); assert.equal(result.answer.visible.noul, 0.92); }
+    });
+  }
+});
+
+test("Clef images use its model-specific envelope and reject text-state truncation risks before sending", async () => {
+  const env = { DISCERN_PROVIDER: "cloudflare", CLOUDFLARE_API_TOKEN: "cf", CLOUDFLARE_ACCOUNT_ID: "a" };
+  let calls = 0;
+  await withFetch(async (url, init) => {
+    calls++;
+    assert.match(url, /\/ai\/run\/@cf\/cloudflare\/clef-flash$/);
+    const body = JSON.parse(init.body);
+    assert.equal(body.model, "clef-flash"); assert.equal(body.input, undefined);
+    assert.deepEqual(body.images, [{ content_type: "image/png", base64: png.toString("base64") }]);
+    return Response.json({ success: true, result: { answers: visualAnswers, usage, model: "clef-flash" } });
+  }, async () => {
+    const request = { ...input, state: { photo: image(png) }, questions: visualQuestions, model: "clef-flash" };
+    assert.equal((await ask(request, { env })).ok, true);
+    rejected(await ask({ ...request, state: { ...request.state, tail: "x".repeat(2000) } }, { env }), "invalid_image", /text-state/);
+    rejected(await ask({ ...request, questions: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [String(i), visualQuestions.visible])) }, { env }), "unsupported_feature", /question limit/);
+    assert.equal(calls, 1);
+  });
+});
+
+test("OpenAI repeats labeled image input on every chunk and preflights all encoded bodies", async () => {
+  const env = { DISCERN_PROVIDER: "openai", OPENAI_API_KEY: "o" };
+  let calls = 0;
+  const qs = Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`q${i}`, visualQuestions.visible]));
+  await withFetch(async (_url, init) => {
+    calls++;
+    const body = JSON.parse(init.body), content = body.input[0].content;
+    const state = JSON.parse(content[0].text.slice("State (JSON):\n".length));
+    assert.ok(content[1].text.includes(state.photo));
+    assert.deepEqual(content[2], { type: "input_image", image_url: `data:image/png;base64,${png.toString("base64")}` });
+    return Response.json({ answers: body.questions.map((q) => ({ name: q.name, type: "choice", choice: true, probabilities: [{ value: true, probability: 0.92 }, { value: false, probability: 0.08 }], confidence: 0.9 })), usage, model: "gpt-6-luna" });
+  }, async () => {
+    const request = { ...input, state: { photo: image(png) }, questions: qs, model: "latest" };
+    const result = await ask(request, { env });
+    assert.equal(result.ok, true, result.message); assert.equal(result.answer.q200.noul, 0.92); assert.equal(calls, 2);
+    rejected(await ask({ ...request, questions: { ...qs, q200: { type: "noul", instructions: "x".repeat(13 * 1024 * 1024) } } }, { env }), "invalid_image", /13 MiB/);
+    assert.equal(calls, 2);
+  });
+  calls = 0;
+  await withFetch(async (_url, init) => {
+    calls++;
+    const body = JSON.parse(init.body);
+    return Response.json({ answers: body.questions.map((q) => ({ name: q.name, type: "choice", choice: true, probabilities: [{ value: true, probability: 1 }, { value: false, probability: 0 }] })), usage, model: calls === 1 ? "gpt-6-luna" : "text-only" });
+  }, async () => {
+    let observed = false;
+    rejected(await ask({ ...input, state: image(png), questions: qs, model: "latest" }, { env, onReply: () => { observed = true; } }), "request_failed", /incompatible image chunk/);
+    assert.equal(observed, false);
   });
 });

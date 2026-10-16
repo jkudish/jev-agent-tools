@@ -1,5 +1,6 @@
 import type { BuiltinDriver } from "../provider.js";
 import { CarrierFailure, postJson, usageOf } from "./http.js";
+import { imageJson, JEV_BOX, JEV_IMAGES } from "../images.js";
 
 /** Map a model name to a TypeSafe model id; the neutral `latest` alias is `jev-latest`. */
 export const typesafeModel = (model: string) => (model === "latest" ? "jev-latest" : model);
@@ -16,12 +17,14 @@ export const typesafe: BuiltinDriver = {
     const baseURL = env.TYPESAFE_BASE_URL || "https://api.typesafe.ai";
     return {
       name: this.name,
-      async ask({ state, questions, model, signal }) {
+      capabilities: (model) => model === "jev-1.14.0" ? JEV_BOX
+        : ["latest", "jev-latest", "jev-preview", "jev-1.13.0"].includes(model) ? JEV_IMAGES : undefined,
+      async ask({ state, questions, model, signal, images }) {
         const requested = typesafeModel(model);
         const body = await postJson(
           `${baseURL.replace(/\/$/, "")}/v1/systemone`,
-          { Authorization: `Bearer ${key}`, Accept: "application/json", "Content-Type": "application/json" },
-          JSON.stringify({ state, questions, model: requested }),
+          { Authorization: `Bearer ${key}`, Accept: "application/json", "Content-Type": "application/json", ...(images ? { "TypeSafe-Danger-Zone-Images": "true" } : {}) },
+          imageJson({ state, questions, model: requested, ...(images ? { assets: Object.fromEntries(Object.entries(images).map(([id, asset]) => [id, { type: "image", format: asset.mediaType === "image/png" ? "png" : "jpeg", data_base64: asset.data_base64 }])) } : {}) }, images),
           { label: "TypeSafe API", signal, maxAttempts: options.maxAttempts },
         ) as Record<string, unknown> | null;
         if (!body || typeof body !== "object" || Array.isArray(body)) throw new CarrierFailure("TypeSafe API returned an invalid envelope (response omitted)");

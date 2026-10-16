@@ -7,12 +7,15 @@ import { compatible } from "./transports/compatible.js";
 import { subq } from "./transports/subq.js";
 import { normalizeDiscernEnv } from "./env.js";
 import { CarrierFailure, CarrierHttpError, CarrierRejection } from "./transports/http.js";
+import { ImageFailure, prepareImages, type DiscernCapabilities, type PreparedImages } from "./images.js";
 
 export interface DiscernTransportInput {
   state: unknown;
   questions: Record<string, unknown>;
   model: string;
   signal: AbortSignal;
+  /** Prepared by ask(). Custom transports must preserve these assets and references. */
+  images?: PreparedImages;
 }
 
 export interface DiscernTransportReply {
@@ -23,6 +26,8 @@ export interface DiscernTransportReply {
 
 export interface DiscernTransport {
   readonly name: string;
+  /** Absent means text-only. Resolve against the exact carrier protocol and model. */
+  capabilities?(model: string): DiscernCapabilities | undefined;
   ask(input: DiscernTransportInput): Promise<DiscernTransportReply>;
 }
 
@@ -51,16 +56,20 @@ export type JevTransport = DiscernTransport;
 
 export type DiscernAnswer =
   | { type: "noul"; noul: number }
+  // A Box is not a presence judgment. Even an absent target can receive a box.
+  | { type: "box"; box: DiscernBox; confidence: number | null }
   | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number | null }
   // Score is the probability-weighted mean of level indices (it can fall
   // between levels) or, for some carriers, the most likely level. Validation
   // guarantees it is one of the two; use `probabilities` for anything finer.
   | { type: "score"; score: number; probabilities: Record<string, number>; confidence: number | null };
 
+export interface DiscernBox { top: number; bottom: number; left: number; right: number }
+
 /** @deprecated Use DiscernAnswer. Removed in 2.0. */
 export type JevAnswer = DiscernAnswer;
 
-export type RejectionCode = "request_failed" | "rate_limited" | "unavailable" | "timeout" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "refused" | "invalid_confidence" | "invalid_usage" | "invalid_model";
+export type RejectionCode = "request_failed" | "rate_limited" | "unavailable" | "timeout" | "configuration_error" | "malformed_answer" | "answer_id_mismatch" | "invalid_criteria" | "invalid_distribution" | "invalid_choice" | "invalid_noul" | "refused" | "invalid_confidence" | "invalid_usage" | "invalid_model" | "invalid_image" | "unsupported_feature" | "invalid_box";
 
 export type AskResult =
   | { ok: true; answer: Record<string, DiscernAnswer>; usage: DiscernTransportReply["usage"]; model: string; provider: string }
@@ -186,9 +195,12 @@ export async function ask(input: DiscernTransportInput, config: AskConfig = {}):
   else caller?.addEventListener?.("abort", relay, { once: true });
   let reply: DiscernTransportReply;
   try {
-    reply = await transport.ask({ ...input, signal: controller.signal });
+    input = prepareImages({ ...input, signal: controller.signal }, transport.capabilities?.(input.model));
+    controller.signal.throwIfAborted();
+    reply = await transport.ask(input);
   } catch (error) {
     if (timedOut && !caller?.aborted) return { ok: false, code: "timeout", message: `Discern provider ${provider}: no answer within the ${timeoutMs}ms deadline` };
+    if (error instanceof ImageFailure) return { ok: false, code: error.code, message: error.message };
     if (error instanceof CarrierRejection) return error.result;
     // HTTP failures carry a numeric `status`. Only built-in carriers
     // (CarrierHttpError, constructible only inside this package) add an
@@ -205,6 +217,19 @@ export async function ask(input: DiscernTransportInput, config: AskConfig = {}):
   } finally {
     clearTimeout(timer);
     caller?.removeEventListener?.("abort", relay);
+  }
+  // Never expose a downgraded image reply through the raw per-answer recovery
+  // seam. A valid-looking answer cannot establish that the model saw pixels.
+  try {
+    if (input.images) {
+      const effective = transport.capabilities?.(reply.model);
+      const box = Object.values(input.questions).some((q) => read(q, "type") === "box");
+      if (!effective || (box && !effective.box)) return {
+        ok: false, code: "unsupported_feature", message: "Effective provider/model does not support the requested image features",
+      };
+    }
+  } catch {
+    return { ok: false, code: "unsupported_feature", message: "Effective provider/model capabilities could not be established" };
   }
   try {
     config.onReply?.(reply);
@@ -233,6 +258,16 @@ export function validateReply(input: DiscernTransportInput, reply: DiscernTransp
     if (question.type === "noul") {
       if (typeof answer.noul !== "number" || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1) return fail(id, "invalid_noul", "noul must be finite in [0,1]");
       validated.push([id, { type: "noul", noul: answer.noul as number }]);
+      continue;
+    }
+    if (question.type === "box") {
+      const box = answer.box;
+      const confidence = answer.confidence ?? null;
+      const unit = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1;
+      if (!record(box) || ![box.top, box.bottom, box.left, box.right].every(unit) ||
+          (box.top as number) >= (box.bottom as number) || (box.left as number) >= (box.right as number) ||
+          (confidence !== null && !unit(confidence))) return fail(id, "invalid_box", "box must have ordered finite edges in [0,1] and finite confidence in [0,1] or null");
+      validated.push([id, { type: "box", box: { top: box.top as number, bottom: box.bottom as number, left: box.left as number, right: box.right as number }, confidence: confidence as number | null }]);
       continue;
     }
     const keys = question.type === "score" && Array.isArray(question.criteria)
