@@ -74,7 +74,7 @@ Set `DISCERN_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `com
 
 ## Image judgments and Box (1.0, unreleased)
 
-Use `image(bytes)` from the normal SDK entry. No enable flag or experimental import is needed. Upstream vision and Box APIs are experimental; protocol tests do not establish visual accuracy. Live image evaluation is still required before releasing these routes.
+Use `image(bytes)` from the normal SDK entry. No enable flag or experimental import is needed. Upstream vision and Box APIs are experimental; protocol tests do not establish visual accuracy. See the route-specific live results below; Vercel remains live-unverified.
 
 ```js
 import { readFile } from "node:fs/promises";
@@ -98,7 +98,7 @@ Image-bearing state/questions must be plain JSON objects/arrays/primitives plus 
 | Provider/protocol | Image models | Placement / count | Native Box |
 | --- | --- | --- | --- |
 | TypeSafe `/v1/systemone` | `jev-1.13.0`, `jev-1.14.0`, `latest`, `jev-latest`, `jev-preview` | State, instructions, criteria / 4 | Explicit `jev-1.14.0` only |
-| OpenRouter `/api/alpha/decisions` | `typesafe/jev-1.13`, `typesafe/jev-1.14` (also `.0` suffixes), existing latest aliases | State, instructions, criteria / 4 | Explicit `typesafe/jev-1.14` or `typesafe/jev-1.14.0` |
+| OpenRouter `/api/alpha/decisions` | `typesafe/jev-1.13`, `typesafe/jev-1.14` (also `.0` suffixes), `typesafe/jev-1.14-20261014`, existing latest aliases | State, instructions, criteria / 4 | Explicit 1.14 IDs listed here, including the observed dated snapshot |
 | OpenAI `/v1/decisions` | `gpt-6-luna`, existing default aliases | State / 4 | No |
 | SubQ `/v1/systemone` | `subq-snap-preview`, existing default aliases | State / 1 initially | No |
 | Cloudflare model-specific `/ai/run/@cf/cloudflare/…` | `clef`, `clef-flash` (or qualified IDs) | State / 1; at most 64 questions, 2,000 serialized state bytes | No |
@@ -119,7 +119,22 @@ Injected transports remain text-only unless `capabilities(model)` declares image
 
 After building, `node test/vision-live.mjs typesafe jev-1.14.0 --dry-run` lists fixture hashes and request count without inference. It still requires the selected provider's configuration. Remove `--dry-run` only with spend/data approval: the script makes 7–11 paid requests on that one route, `maxAttempts:1`, using only versioned synthetic images. Select other providers/models with the two positional arguments. It never runs as part of `npm test` or the existing CI live smoke.
 
-The 480×320 fixtures cover PNG/JPEG, pixel-only red/blue swaps, absence, multiple targets, a misleading caption, and visual instructions. Ground truth for the right rectangle is `{top:40/320,bottom:230/320,left:290/480,right:430/480}`. A tail sentinel tests state retention; supported multi-image/inline routes also get reversed-order identity checks. JSON-line receipts include expected/actual judgments, model/provider, usage, latency, and Box intersection-over-union (required ≥0.8 on unique positives). These are demonstration gates, not production calibration. Record the tested commit and receipt; an offline pass does not substitute for this live check.
+The 480×320 fixtures cover PNG/JPEG, pixel-only red/blue swaps, absence, multiple targets, a misleading caption, and visual instructions. Ground truth for the right rectangle is `{top:40/320,bottom:230/320,left:290/480,right:430/480}`. A tail sentinel tests state retention; supported multi-image/inline routes also get reversed-order identity checks. JSON-line receipts include expected/actual judgments, model/provider, usage, latency, and Box intersection-over-union (required ≥0.8 on unique positives). Protocol/access failures stop the run; semantic misses are retained without changing thresholds. These are demonstration gates, not production calibration. Record the tested commit and receipt; an offline pass does not substitute for this live check.
+
+Synthetic live run, October 15, 2026 (Pacific): each row uses the same version-1 fixtures, one attempt per request. A strict pass requires expected probabilities ≥0.8 or ≤0.2, correct identity/tail answers, and, where applicable, positive Box IoU/confidence ≥0.8. Small counts are not accuracy estimates.
+
+| Route/model tested | Strict cases passed | Observations |
+| --- | --- | --- |
+| TypeSafe `jev-1.13.0` | 11/11 | Includes multi-image and inline-criterion reversals; no Box requested |
+| TypeSafe `jev-1.14.0` | 11/11 | Positive Box overlap passed; negative images still received geometry, so separate presence policy is necessary |
+| OpenRouter `typesafe/jev-1.14` | 11/11 after fix | Effective ID `typesafe/jev-1.14-20261014`; previously rejected by the capability guard. This exact snapshot is now supported; unknown snapshots still fail closed |
+| OpenAI `gpt-6-luna` | 7/9 | Ambiguous uniqueness 0.54; visual-instruction uniqueness 0.78. Valid protocol, but both miss the strict gates |
+| SubQ `subq-snap-preview` | 7/7 | Single-image PNG/JPEG and tail sentinel passed |
+| Cloudflare `clef-flash` | 4/7 | Ambiguous, misleading-caption and visual-instruction cases miss probability gates; tail sentinel retained |
+| Cloudflare `clef` | 4/7 | Blue/absent uniqueness and visual-instruction presence miss probability gates; tail sentinel retained |
+| Vercel versioned Jev 1.13/1.14 | Unverified | HTTP 403 account restriction, also reproduced on a text-only control; no upstream provider attempt. No paid-account upgrade performed |
+
+These outcomes do not establish arbitrary-image reliability, visual prompt-injection resistance, or production thresholds. In particular, OpenAI/Clef semantic misses remain evaluation findings, not fixed bugs or passing gates. Vercel's adapter has offline wire coverage only. Sanitized receipts and the five-call real MCP follow-through are recorded in the [vision implementation thread](https://ampcode.com/threads/T-01a14107-eee0-7578-ab64-a041632a82e1).
 
 ## Validation
 
