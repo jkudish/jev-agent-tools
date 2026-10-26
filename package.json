@@ -1,13 +1,13 @@
 {
-  "name": "@jkudish/jev-agent-tools",
-  "version": "0.2.1",
-  "description": "Jev transport/provider layer: multi-provider transport layer that supports fail-closed validation. Used by jkudish/jev-browser and jkudish/jev-mcp.",
+  "name": "@jkudish/discern-sdk",
+  "version": "1.0.0",
+  "description": "Discern transport/provider layer: one ask() over TypeSafe Jev, OpenRouter, Cloudflare (Jev and Clef), Vercel, OpenAI Decisions, and SubQ Decisions, with fail-closed answer validation. Used by @jkudish/discern-browser and @jkudish/discern-mcp.",
   "type": "module",
   "license": "MIT",
   "author": "Joey Kudish",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jkudish/jev-agent-tools.git"
+    "url": "git+https://github.com/jkudish/discern-sdk.git"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,9 +27,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p test/types",
     "build": "tsc",
-    "test": "node --test test/transports.test.mjs",
+    "test": "node --test test/transports.test.mjs test/subq.test.mjs",
     "test:live": "node --test test/live.test.mjs"
   },
   "devDependencies": {
