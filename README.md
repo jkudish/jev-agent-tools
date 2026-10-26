@@ -72,7 +72,7 @@ The neutral model alias `latest` means each carrier's current default model: Jev
 
 Set `DISCERN_PROVIDER` to `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, `openai`, `subq`, or `auto` to select strictly. Unknown names and missing credentials fail rather than falling through; an empty value means `auto`. With no provider configured, the diagnostic names every supported credential variable. `config.env` accepts an injectable environment record, and `config.transport` accepts a run-bound transport for callers that own one. `config.onReply` receives the raw reply before final validation; SubQ validates each chunk before exposing the combined reply. Treat it as untrusted input.
 
-## Image judgments and Box (1.0, unreleased)
+## Image judgments and Box
 
 Use `image(bytes)` from the normal SDK entry. No enable flag or experimental import is needed. Upstream vision and Box APIs are experimental; protocol tests do not establish visual accuracy. See the route-specific live results below; Vercel remains live-unverified.
 
@@ -136,7 +136,7 @@ Synthetic live run, October 15, 2026 (Pacific): each row uses the same version-1
 | Cloudflare `clef` | 4/7 | Blue/absent uniqueness and visual-instruction presence miss probability gates; tail sentinel retained |
 | Vercel versioned Jev 1.13/1.14 | Unverified | HTTP 403 account restriction, also reproduced on a text-only control; no upstream provider attempt. No paid-account upgrade performed |
 
-These outcomes do not establish arbitrary-image reliability, visual prompt-injection resistance, or production thresholds. In particular, OpenAI/Clef semantic misses remain evaluation findings, not fixed bugs or passing gates. Vercel's adapter has offline wire coverage only. Sanitized receipts and the five-call real MCP follow-through are recorded in the [vision implementation thread](https://ampcode.com/threads/T-01a14107-eee0-7578-ab64-a041632a82e1).
+These outcomes do not establish arbitrary-image reliability, visual prompt-injection resistance, or production thresholds. In particular, OpenAI/Clef semantic misses remain evaluation findings, not fixed bugs or passing gates. Vercel's adapter has offline wire coverage only.
 
 ## Validation
 
